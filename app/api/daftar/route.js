@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { db } from '@/lib/db';
+import { hashPassword } from '@/lib/studentAuth';
 
 export const dynamic = 'force-dynamic';
 
@@ -32,6 +33,7 @@ export async function POST(req) {
     const nis = String(b.nis || '').trim();
     const nama = String(b.nama || '').trim().replace(/\s+/g, ' ');
     const classId = b.class_id;
+    const password = String(b.password || '');
     const d = b.descriptor;
 
     if (process.env.REGISTER_CODE && String(b.kode || '').trim() !== process.env.REGISTER_CODE) {
@@ -40,6 +42,7 @@ export async function POST(req) {
     if (!/^[0-9A-Za-z.\-]{4,20}$/.test(nis)) return bad('NIS tidak valid (4-20 karakter, huruf/angka).');
     if (nama.length < 3 || nama.length > 80) return bad('Nama lengkap tidak valid.');
     if (!classId) return bad('Pilih kelas terlebih dahulu.');
+    if (password.length < 6 || password.length > 72) return bad('Password minimal 6 karakter.');
     if (!Array.isArray(d) || d.length !== 128 || !d.every((x) => Number.isFinite(x))) {
       return bad('Data wajah tidak valid. Ambil wajah ulang.');
     }
@@ -59,8 +62,14 @@ export async function POST(req) {
     };
     if (photo) row[COL.photo] = photo;
 
-    const { error: e2 } = await sb.from(COL.table).insert(row);
+    const { data: created, error: e2 } = await sb.from(COL.table).insert(row).select('id').single();
     if (e2) throw e2;
+
+    const { error: e3 } = await sb.from('student_accounts').insert({ student_id: created.id, password_hash: hashPassword(password) });
+    if (e3) {
+      await sb.from(COL.table).delete().eq('id', created.id); // batalkan agar tidak ada siswa tanpa akun
+      throw e3;
+    }
     return NextResponse.json({ ok: true });
   } catch (e) {
     return bad(e.message || 'Gagal menyimpan pendaftaran', 500);
