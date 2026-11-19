@@ -5,6 +5,7 @@ import { api } from '@/lib/client';
 import { loadFaceApi, DETECT_OPTS, DETECT_FAST, startCamera, stopCamera, eyeAspect, getVoicePrefs, setVoicePrefs, speak, unlockSpeech, unlockAudio, beep } from '@/lib/faceClient';
 
 const COOLDOWN_MS = 5000;
+const REPEAT_VOICE_MS = 10_000;
 
 export default function Presensi() {
   const videoRef = useRef(null);
@@ -15,12 +16,21 @@ export default function Presensi() {
   const [msg, setMsg] = useState('');
   const [hint, setHint] = useState('Memuat…');
   const [result, setResult] = useState(null);
+  const [recent, setRecent] = useState([]);
+  const [debug, setDebug] = useState(false);
+  const [earInfo, setEarInfo] = useState('');
   const [voice, setVoice] = useState({ on: true, volume: 1, rate: 1 });
   const [showSet, setShowSet] = useState(false);
   const [clock, setClock] = useState('');
-  const st = useRef({ activity: 'zuhur', busy: false, blink: 0, closed: false, blinkAt: 0, lastSent: new Map(), pauseUntil: 0, stable: 0 });
+  const st = useRef({ activity: 'zuhur', busy: false, blink: 0, closed: false, blinkAt: 0, lastSent: new Map(), pauseUntil: 0, debug: false });
 
-  useEffect(() => { loadFaceApi().catch(() => {}); setVoice(getVoicePrefs()); api('/api/presensi/config').then(setCfg).catch((e) => setMsg(e.message)); }, []);
+  useEffect(() => {
+    loadFaceApi().catch(() => {});
+    setVoice(getVoicePrefs());
+    const dbg = new URLSearchParams(window.location.search).get('debug') === '1';
+    st.current.debug = dbg; setDebug(dbg);
+    api('/api/presensi/config').then(setCfg).catch((e) => setMsg(e.message));
+  }, []);
   useEffect(() => { st.current.activity = activity; }, [activity]);
   useEffect(() => { const t = setInterval(() => setClock(new Date().toLocaleTimeString('id-ID', { timeZone: 'Asia/Jakarta', hour12: false }).replace(/:/g, '.')), 1000); return () => clearInterval(t); }, []);
 
@@ -58,11 +68,12 @@ export default function Presensi() {
           else {
             const e = eyeAspect(d.landmarks);
             S.frames++;
-            S.base = Math.max(e, (S.base || e) * 0.995);          // tinggi mata saat terbuka (adaptif per orang)
-            const thr = Math.min(0.23, S.base * 0.82);              // ambang 'tertutup' relatif
+            S.base = Math.max(e, (S.base || e) * 0.995);            // tinggi mata saat terbuka (adaptif per orang)
+            const thr = Math.min(0.25, S.base * 0.88);                // ambang 'tertutup' relatif (lebih peka)
+            if (S.debug) setEarInfo(`EAR ${e.toFixed(3)} | dasar ${S.base.toFixed(3)} | batas ${thr.toFixed(3)} | tertutup ${S.closed ? 'YA' : 'tidak'} | kedip ${S.blink}`);
             if (S.frames > 6) {
               if (e < thr) S.closed = true;
-              else if (S.closed && e >= thr * 1.06) { S.closed = false; S.blink++; S.blinkAt = now; }
+              else if (S.closed && e >= thr * 1.03) { S.closed = false; S.blink++; S.blinkAt = now; }
             }
             if (S.blink > 0 && now - S.blinkAt > 6000) S.blink = 0;
             if (S.blink === 0) setHint(S.closed ? 'Buka mata…' : 'Lihat kamera, lalu KEDIPKAN MATA pelan-pelan');
@@ -72,12 +83,17 @@ export default function Presensi() {
               try {
                 const full = await f.detectSingleFace(v, DETECT_OPTS(f)).withFaceLandmarks().withFaceDescriptor();
                 if (full) await submit(Array.from(full.descriptor));
+                else setHint('Wajah tidak terbaca, coba kedip lagi');
               } finally { S.busy = false; S.blink = 0; S.closed = false; }
             }
           }
         }
-      } catch (err) { S.busy = false; }
-      setTimeout(tick, 30);
+      } catch (err) {
+        console.error('Deteksi wajah gagal:', err);
+        S.busy = false;
+        setHint('Kesalahan deteksi: ' + (err?.message || err));
+      }
+      setTimeout(tick, 0);
     };
     tick();
   }
@@ -90,25 +106,44 @@ export default function Presensi() {
       const last = S.lastSent.get(key) || 0;
       S.pauseUntil = Date.now() + COOLDOWN_MS;
       setResult(r);
-      // anti suara berulang: hasil yang sama untuk siswa yang sama tidak diucapkan lagi dalam 30 detik
-      if (Date.now() - last > 30_000) {
-        if (r.result === 'ok') { beep('ok'); speak(r.speech || `Selamat datang, ${r.student.nama}. Presensi berhasil.`); }
-        else if (r.result === 'duplicate') { beep('warn'); speak(`${r.student.nama}, Anda sudah melakukan presensi.`); }
-        else if (r.result === 'unknown') { beep('err'); speak('Wajah tidak dikenali. Silakan coba kembali.'); }
-        else { beep('err'); speak(r.message || 'Presensi tidak dapat diproses.'); }
+
+      const nama = r.student?.nama;
+      if (nama && (r.result === 'ok' || r.result === 'duplicate')) {
+        const label = r.result === 'ok' ? (r.status_label || r.status || 'hadir') : 'sudah presensi';
+        setRecent((p) => [{ nama, kelas: r.student.kelas, waktu: r.waktu, label, ok: r.result === 'ok' }, ...p.filter((x) => x.nama !== nama)].slice(0, 5));
+      }
+
+      // anti suara berulang: hasil yang sama untuk siswa yang sama tidak diucapkan lagi dalam 10 detik
+      if (Date.now() - last > REPEAT_VOICE_MS) {
+        if (r.result === 'ok') {
+          const st2 = (r.status_label || r.status || 'hadir').toLowerCase();
+          beep('ok');
+          speak(r.speech || `${nama}, presensi ${r.student.kegiatan || ''} berhasil. Anda dinyatakan ${st2}.`);
+        } else if (r.result === 'duplicate') {
+          beep('warn'); speak(`${nama}, Anda sudah melakukan presensi hari ini.`);
+        } else if (r.result === 'unknown') {
+          beep('err'); speak('Wajah tidak dikenali. Silakan coba kembali.');
+        } else {
+          beep('err'); speak(r.message || 'Presensi tidak dapat diproses.');
+        }
         S.lastSent.set(key, Date.now());
       }
       setTimeout(() => setResult(null), COOLDOWN_MS - 200);
     } catch (e) {
       S.pauseUntil = Date.now() + 3000;
       beep('err');
+      speak(e.message || 'Terjadi kesalahan.');
       setResult({ result: 'error', message: e.message });
       setTimeout(() => setResult(null), 2800);
     }
   }
 
   const act = cfg?.schedule?.find((x) => x.activity === activity);
-  const color = result?.result === 'ok' ? 'from-emerald to-primary' : result?.result === 'duplicate' ? 'from-gold to-amber-600' : 'from-red-500 to-red-800';
+  const isLate = (result?.status || '').toLowerCase() === 'terlambat';
+  const color =
+    result?.result === 'ok' ? (isLate ? 'from-gold to-amber-600' : 'from-emerald to-primary')
+    : result?.result === 'duplicate' ? 'from-blue-500 to-blue-800'
+    : 'from-red-500 to-red-800';
 
   return (
     <main className="min-h-screen gloss p-3 md:p-6 flex flex-col">
@@ -132,6 +167,7 @@ export default function Presensi() {
           <video ref={videoRef} className="w-full h-full object-cover [transform:scaleX(-1)]" playsInline muted />
           {phase === 'ready' && <><div className="absolute inset-[12%] rounded-[40%] border-4 border-dashed border-white/70 pointer-events-none" /><div className="scanline" /></>}
           {phase === 'ready' && <div className="absolute bottom-3 inset-x-3 text-center"><span className="inline-block bg-black/60 text-white text-sm font-semibold px-4 py-2 rounded-full">{hint}</span></div>}
+          {phase === 'ready' && debug && <div className="absolute top-2 inset-x-2 text-center"><span className="inline-block bg-black/70 text-yellow-300 text-xs font-mono px-3 py-1 rounded">{earInfo || 'debug aktif…'}</span></div>}
           {phase !== 'ready' && (
             <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-dark/90 p-6 text-center">
               {phase === 'loading' ? <div className="animate-pulse">Memuat model wajah & kamera…</div> : (
@@ -149,10 +185,11 @@ export default function Presensi() {
               {result.result === 'ok' || result.result === 'duplicate' ? (
                 <>
                   {result.student.photo ? <img src={result.student.photo} alt="" className="w-24 h-24 md:w-32 md:h-32 rounded-full object-cover border-4 border-white shadow-xl" /> : <div className="text-6xl">{result.result === 'ok' ? '✅' : 'ℹ️'}</div>}
-                  <div className="mt-2 text-2xl md:text-3xl font-extrabold">{result.result === 'ok' ? 'SELAMAT DATANG!' : 'SUDAH PRESENSI'}</div>
-                  {result.result === 'duplicate' && <div className="text-sm font-semibold">{result.message}</div>}
+                  <div className="mt-2 text-2xl md:text-3xl font-extrabold">{result.result === 'ok' ? (isLate ? 'HADIR (TERLAMBAT)' : 'PRESENSI BERHASIL!') : 'SUDAH PRESENSI SEBELUMNYA'}</div>
+                  <div className="text-xl md:text-2xl font-bold mt-1">{result.student.nama}</div>
+                  {result.result === 'duplicate' && <div className="text-sm font-semibold mt-1">{result.message}</div>}
                   <div className="mt-2 text-left bg-white/20 rounded-2xl p-3 text-sm md:text-base space-y-0.5">
-                    <div><b>Nama:</b> {result.student.nama}</div><div><b>NIS:</b> {result.student.nis}</div>
+                    <div><b>NIS:</b> {result.student.nis}</div>
                     <div><b>Kelas:</b> {result.student.kelas} · {result.student.jurusan}</div>
                     <div><b>Kegiatan:</b> {result.student.kegiatan}</div><div><b>Tanggal:</b> {result.student.tanggal}</div>
                     <div><b>Waktu:</b> {result.waktu}</div><div><b>Status:</b> {(result.status_label || result.status || '').toUpperCase()}</div>
@@ -166,6 +203,20 @@ export default function Presensi() {
         </div>
       </section>
 
+      {recent.length > 0 && (
+        <section className="relative mt-3 mx-auto w-full max-w-3xl bg-white/15 rounded-2xl p-3">
+          <div className="text-xs font-bold opacity-90 mb-1">Presensi terakhir di layar ini</div>
+          <div className="space-y-1">
+            {recent.map((x) => (
+              <div key={x.nama} className="flex items-center justify-between gap-2 text-sm bg-white/10 rounded-xl px-3 py-1.5">
+                <span className="font-semibold truncate">{x.nama} <span className="opacity-70 font-normal">· {x.kelas}</span></span>
+                <span className={`shrink-0 text-xs font-bold rounded-full px-2 py-0.5 ${x.ok ? 'bg-emerald-500/80' : 'bg-blue-500/80'}`}>{String(x.label).toUpperCase()} {x.waktu}</span>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
       <footer className="relative mt-3 flex flex-wrap items-center justify-center gap-2 text-sm">
         <button className="btn bg-white/20" onClick={() => setShowSet(!showSet)}>🔊 Suara</button>
         <Link href="/admin" className="btn bg-white/20">Dashboard Admin</Link>
@@ -177,7 +228,7 @@ export default function Presensi() {
           <label className="flex items-center gap-2 text-sm font-semibold"><input type="checkbox" checked={voice.on} onChange={(e) => { const v = { ...voice, on: e.target.checked }; setVoice(v); setVoicePrefs(v); }} /> Suara aktif</label>
           <div><label className="label">Volume ({Math.round(voice.volume * 100)}%)</label><input type="range" min="0" max="1" step="0.1" className="w-full" value={voice.volume} onChange={(e) => { const v = { ...voice, volume: +e.target.value }; setVoice(v); setVoicePrefs(v); }} /></div>
           <div><label className="label">Kecepatan ({voice.rate}x)</label><input type="range" min="0.6" max="1.4" step="0.1" className="w-full" value={voice.rate} onChange={(e) => { const v = { ...voice, rate: +e.target.value }; setVoice(v); setVoicePrefs(v); }} /></div>
-          <button className="btn btn-primary" onClick={() => { unlockSpeech(); unlockAudio(); beep('ok', { ...voice, on: true }); speak('Selamat datang, Muhammad Rizki. Presensi Salat Zuhur berhasil. Anda dinyatakan hadir.', { ...voice, on: true }); }}>Tes Suara</button>
+          <button className="btn btn-primary" onClick={() => { unlockSpeech(); unlockAudio(); beep('ok', { ...voice, on: true }); speak('Muhammad Rizki, presensi Salat Zuhur berhasil. Anda dinyatakan hadir.', { ...voice, on: true }); }}>Tes Suara</button>
         </div>
       )}
     </main>
