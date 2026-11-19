@@ -12,7 +12,7 @@ export default function Daftar() {
   const [cfg, setCfg] = useState(null);
   const [classes, setClasses] = useState([]);
   const [needCode, setNeedCode] = useState(false);
-  const [f, setF] = useState({ nis: '', nama: '', class_id: '', kode: '' });
+  const [f, setF] = useState({ nis: '', nama: '', class_id: '', kode: '', password: '' });
   const [cam, setCam] = useState('off'); // off | loading | on
   const [face, setFace] = useState(null); // { descriptor, photo }
   const [scanning, setScanning] = useState(false);
@@ -100,7 +100,7 @@ export default function Daftar() {
           <div className="text-6xl">✅</div>
           <h1 className="text-2xl font-extrabold text-dark">Pendaftaran Berhasil</h1>
           <p className="text-sm">Data dan wajah <b>{f.nama}</b> sudah tersimpan. Sekarang kamu bisa presensi langsung dengan Face ID.</p>
-          <Link href="/presensi" className="btn btn-gold w-full !py-3">📷 Mulai Presensi Wajah</Link>
+          <Link href="/siswa/login" className="btn btn-gold w-full !py-3">🎓 Masuk ke Dashboard Siswa</Link>
           <Link href="/login" className="btn btn-ghost w-full">Kembali ke Login</Link>
         </div>
       </main>
@@ -134,6 +134,11 @@ export default function Daftar() {
               <option value="">— Pilih kelas —</option>
               {classes.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
             </select>
+          </div>
+          <div>
+            <label className="label" htmlFor="pw">Password Akun</label>
+            <input id="pw" type="password" className="input" autoComplete="new-password" minLength={6} value={f.password} onChange={(e) => setF({ ...f, password: e.target.value })} placeholder="Minimal 6 karakter" required />
+            <p className="text-[11px] text-ink/60 mt-1">Dipakai untuk login ke dashboard siswa bersama NIS.</p>
           </div>
           {needCode && (
             <div>
