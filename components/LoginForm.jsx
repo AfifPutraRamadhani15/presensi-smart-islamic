@@ -52,6 +52,7 @@ export default function LoginForm({ school }) {
       <div className="flex items-center gap-3 text-xs text-ink/40"><span className="flex-1 h-px bg-emerald/20" />atau<span className="flex-1 h-px bg-emerald/20" /></div>
 
       <a href="/presensi" className="btn btn-gold w-full !py-3 text-base">📷 Mulai Presensi Wajah</a>
+      <a href="/daftar" className="btn btn-ghost w-full !py-3 text-base">🎓 Daftar Siswa Baru</a>
 
       <p className="text-center text-[11px] text-ink/40 pt-2">{school} · © {new Date().getFullYear()}</p>
     </form>
