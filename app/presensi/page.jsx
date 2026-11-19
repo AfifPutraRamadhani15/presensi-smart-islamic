@@ -2,9 +2,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { api } from '@/lib/client';
-import { loadFaceApi, DETECT_OPTS, startCamera, stopCamera, eyeAspect, getVoicePrefs, setVoicePrefs, speak, unlockSpeech } from '@/lib/faceClient';
+import { loadFaceApi, DETECT_OPTS, DETECT_FAST, startCamera, stopCamera, eyeAspect, getVoicePrefs, setVoicePrefs, speak, unlockSpeech, unlockAudio, beep } from '@/lib/faceClient';
 
-const EAR_CLOSED = 0.21, EAR_OPEN = 0.26;
 const COOLDOWN_MS = 5000;
 
 export default function Presensi() {
@@ -21,13 +20,13 @@ export default function Presensi() {
   const [clock, setClock] = useState('');
   const st = useRef({ activity: 'zuhur', busy: false, blink: 0, closed: false, blinkAt: 0, lastSent: new Map(), pauseUntil: 0, stable: 0 });
 
-  useEffect(() => { setVoice(getVoicePrefs()); api('/api/presensi/config').then(setCfg).catch((e) => setMsg(e.message)); }, []);
+  useEffect(() => { loadFaceApi().catch(() => {}); setVoice(getVoicePrefs()); api('/api/presensi/config').then(setCfg).catch((e) => setMsg(e.message)); }, []);
   useEffect(() => { st.current.activity = activity; }, [activity]);
   useEffect(() => { const t = setInterval(() => setClock(new Date().toLocaleTimeString('id-ID', { timeZone: 'Asia/Jakarta', hour12: false }).replace(/:/g, '.')), 1000); return () => clearInterval(t); }, []);
 
   const start = useCallback(async () => {
     setPhase('loading'); setMsg('');
-    unlockSpeech();
+    unlockSpeech(); unlockAudio();
     try {
       const f = await loadFaceApi();
       streamRef.current = await startCamera(videoRef.current);
@@ -43,36 +42,42 @@ export default function Presensi() {
   useEffect(() => () => { st.current.stop = true; stopCamera(streamRef.current); }, []);
 
   async function loop(f) {
-    const S = st.current; S.stop = false;
+    const S = st.current; S.stop = false; S.base = 0; S.frames = 0;
     const v = videoRef.current;
     const tick = async () => {
       if (S.stop) return;
       const now = Date.now();
-      if (S.busy || now < S.pauseUntil || v.readyState < 2) return setTimeout(tick, 200);
+      if (S.busy || now < S.pauseUntil || v.readyState < 2) return setTimeout(tick, 100);
       try {
-        const dets = await f.detectAllFaces(v, DETECT_OPTS(f)).withFaceLandmarks();
-        if (dets.length === 0) { S.blink = 0; S.closed = false; S.stable = 0; setHint('Posisikan wajah di dalam bingkai'); }
+        const dets = await f.detectAllFaces(v, DETECT_FAST(f)).withFaceLandmarks();
+        if (dets.length === 0) { S.blink = 0; S.closed = false; S.base = 0; S.frames = 0; setHint('Posisikan wajah di dalam bingkai'); }
         else if (dets.length > 1) { S.blink = 0; setHint('Hanya satu wajah yang boleh terlihat'); }
         else {
           const d = dets[0]; const box = d.detection.box;
-          if (box.width < v.videoWidth * 0.22) { setHint('Dekatkan wajah ke kamera'); S.stable = 0; }
+          if (box.width < v.videoWidth * 0.22) { setHint('Dekatkan wajah ke kamera'); S.frames = 0; }
           else {
             const e = eyeAspect(d.landmarks);
-            if (e < EAR_CLOSED) S.closed = true;
-            else if (e > EAR_OPEN && S.closed) { S.closed = false; S.blink++; S.blinkAt = now; }
+            S.frames++;
+            S.base = Math.max(e, (S.base || e) * 0.995);          // tinggi mata saat terbuka (adaptif per orang)
+            const thr = Math.min(0.23, S.base * 0.82);              // ambang 'tertutup' relatif
+            if (S.frames > 6) {
+              if (e < thr) S.closed = true;
+              else if (S.closed && e >= thr * 1.06) { S.closed = false; S.blink++; S.blinkAt = now; }
+            }
             if (S.blink > 0 && now - S.blinkAt > 6000) S.blink = 0;
-            if (S.blink === 0) { setHint('Lihat kamera lalu KEDIPKAN MATA'); }
-            else if (e > EAR_OPEN) {
-              setHint('Memverifikasi wajah…');
+            if (S.blink === 0) setHint(S.closed ? 'Buka mata…' : 'Lihat kamera, lalu KEDIPKAN MATA pelan-pelan');
+            else {
+              setHint('✔ Kedip terdeteksi — memverifikasi wajah…');
               S.busy = true;
-              const full = await f.detectSingleFace(v, DETECT_OPTS(f)).withFaceLandmarks().withFaceDescriptor();
-              if (full) await submit(Array.from(full.descriptor));
-              S.busy = false; S.blink = 0; S.closed = false;
+              try {
+                const full = await f.detectSingleFace(v, DETECT_OPTS(f)).withFaceLandmarks().withFaceDescriptor();
+                if (full) await submit(Array.from(full.descriptor));
+              } finally { S.busy = false; S.blink = 0; S.closed = false; }
             }
           }
         }
       } catch (err) { S.busy = false; }
-      setTimeout(tick, 180);
+      setTimeout(tick, 30);
     };
     tick();
   }
@@ -81,20 +86,22 @@ export default function Presensi() {
     const S = st.current;
     try {
       const r = await api('/api/presensi/recognize', { method: 'POST', body: { descriptor, activity: S.activity, liveness: true } });
-      const key = r.student?.nis || r.result;
+      const key = (r.student?.nis || '') + r.result;
       const last = S.lastSent.get(key) || 0;
       S.pauseUntil = Date.now() + COOLDOWN_MS;
       setResult(r);
-      // anti suara berulang: wajah yang sama tidak diucapkan lagi dalam 30 detik
+      // anti suara berulang: hasil yang sama untuk siswa yang sama tidak diucapkan lagi dalam 30 detik
       if (Date.now() - last > 30_000) {
-        if (r.result === 'ok') speak(r.speech || `Selamat datang, ${r.student.nama}. Presensi berhasil.`, voice);
-        else if (r.result === 'duplicate') speak(`${r.student.nama}, Anda sudah melakukan presensi.`, voice);
-        else if (r.result === 'unknown') speak('Wajah tidak dikenali. Silakan coba kembali.', voice);
+        if (r.result === 'ok') { beep('ok'); speak(r.speech || `Selamat datang, ${r.student.nama}. Presensi berhasil.`); }
+        else if (r.result === 'duplicate') { beep('warn'); speak(`${r.student.nama}, Anda sudah melakukan presensi.`); }
+        else if (r.result === 'unknown') { beep('err'); speak('Wajah tidak dikenali. Silakan coba kembali.'); }
+        else { beep('err'); speak(r.message || 'Presensi tidak dapat diproses.'); }
         S.lastSent.set(key, Date.now());
       }
       setTimeout(() => setResult(null), COOLDOWN_MS - 200);
     } catch (e) {
       S.pauseUntil = Date.now() + 3000;
+      beep('err');
       setResult({ result: 'error', message: e.message });
       setTimeout(() => setResult(null), 2800);
     }
@@ -170,7 +177,7 @@ export default function Presensi() {
           <label className="flex items-center gap-2 text-sm font-semibold"><input type="checkbox" checked={voice.on} onChange={(e) => { const v = { ...voice, on: e.target.checked }; setVoice(v); setVoicePrefs(v); }} /> Suara aktif</label>
           <div><label className="label">Volume ({Math.round(voice.volume * 100)}%)</label><input type="range" min="0" max="1" step="0.1" className="w-full" value={voice.volume} onChange={(e) => { const v = { ...voice, volume: +e.target.value }; setVoice(v); setVoicePrefs(v); }} /></div>
           <div><label className="label">Kecepatan ({voice.rate}x)</label><input type="range" min="0.6" max="1.4" step="0.1" className="w-full" value={voice.rate} onChange={(e) => { const v = { ...voice, rate: +e.target.value }; setVoice(v); setVoicePrefs(v); }} /></div>
-          <button className="btn btn-primary" onClick={() => { unlockSpeech(); speak('Selamat datang, Muhammad Rizki. Presensi Salat Zuhur berhasil. Anda dinyatakan hadir.', { ...voice, on: true }); }}>Tes Suara</button>
+          <button className="btn btn-primary" onClick={() => { unlockSpeech(); unlockAudio(); beep('ok', { ...voice, on: true }); speak('Selamat datang, Muhammad Rizki. Presensi Salat Zuhur berhasil. Anda dinyatakan hadir.', { ...voice, on: true }); }}>Tes Suara</button>
         </div>
       )}
     </main>
