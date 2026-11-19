@@ -14,6 +14,13 @@ export default function WA() {
   async function saveS() { try { await api('/api/settings', { method: 'PUT', body: { wa_enabled: s.wa_enabled, wa_notify_hadir: s.wa_notify_hadir, wa_notify_terlambat: s.wa_notify_terlambat, wa_notify_tidak_hadir: s.wa_notify_tidak_hadir } }); toast('Pengaturan tersimpan'); } catch (e) { toast(e.message, 'err'); } }
   async function saveT(t) { try { await api('/api/crud/whatsapp_templates', { method: 'PUT', body: t }); toast('Template tersimpan'); } catch (e) { toast(e.message, 'err'); } }
   async function resend(id) { setBusy(id); try { await api(`/api/wa/${id}`, { method: 'POST' }); logs.reload(); } catch (e) { toast(e.message, 'err'); } setBusy(''); }
+  function waLink(r) {
+    let n = String(r.to_number || '').replace(/[^\d]/g, '');
+    if (n.startsWith('0')) n = '62' + n.slice(1);
+    else if (n.startsWith('8')) n = '62' + n;
+    return `https://wa.me/${n}?text=${encodeURIComponent(r.message || '')}`;
+  }
+  async function markSent(id) { try { await api(`/api/wa/${id}`, { method: 'PUT', body: { status: 'terkirim' } }); logs.reload(); } catch (e) { toast(e.message, 'err'); } }
   const upd = (id, patch) => tpl.setData(tpl.data.map((t) => (t.id === id ? { ...t, ...patch } : t)));
   return (
     <>
@@ -42,12 +49,16 @@ export default function WA() {
         ))}
       </div>
       <Card>
-        <h3 className="font-bold text-dark mb-2">Riwayat Pengiriman</h3>
+        <h3 className="font-bold text-dark mb-1">Riwayat Pengiriman</h3>
+        <p className="text-xs text-ink/60 mb-2">Tanpa API: klik <b>Kirim via WhatsApp</b> → WhatsApp terbuka dengan nomor & pesan sudah terisi → tekan Kirim → kembali ke sini dan klik <b>Tandai terkirim</b>.</p>
         <Table heads={['Waktu', 'Siswa', 'Nomor', 'Template', 'Status', 'Keterangan', 'Aksi']}>
           {logs.data.rows.map((r) => (
             <tr key={r.id}><td className="td">{new Date(r.created_at).toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' })}</td><td className="td">{r.students?.full_name}</td><td className="td">{r.to_number}</td><td className="td">{r.template_code}</td>
               <td className="td"><span className={`badge ${COLOR[r.status]}`}>{r.status}</span></td><td className="td max-w-xs truncate">{r.error || '-'}</td>
-              <td className="td"><button className="text-primary font-semibold" disabled={busy === r.id} onClick={() => resend(r.id)}>{busy === r.id ? '…' : 'Kirim ulang'}</button></td></tr>
+              <td className="td whitespace-nowrap space-x-3">
+                <a className="text-primary font-semibold" href={waLink(r)} target="_blank" rel="noreferrer">💬 Kirim via WhatsApp</a>
+                {r.status !== 'terkirim' && <button className="text-dark font-semibold" onClick={() => markSent(r.id)}>✔ Tandai terkirim</button>}
+                <button className="text-primary font-semibold" disabled={busy === r.id} onClick={() => resend(r.id)}>{busy === r.id ? '…' : 'Kirim ulang (API)'}</button></td></tr>
           ))}
         </Table>
       </Card>

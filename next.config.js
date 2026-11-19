@@ -3,7 +3,11 @@ module.exports = {
   reactStrictMode: true,
   poweredByHeader: false,
   async headers() {
+    const longCache = [{ key: 'Cache-Control', value: 'public, max-age=31536000, immutable' }];
     return [
+      { source: '/models/:path*', headers: longCache },
+      { source: '/vendor/:path*', headers: longCache },
+      { source: '/icons/:path*', headers: longCache },
       {
         source: '/(.*)',
         headers: [

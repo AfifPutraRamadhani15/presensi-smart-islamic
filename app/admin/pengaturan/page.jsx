@@ -1,15 +1,15 @@
 'use client';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { api, useApi, toast } from '@/lib/client';
 import { Btn, Card, Field, PageHead, Spinner } from '@/components/ui';
 
-function toDataUrl(file, max = 256) {
+function toDataUrl(file, max = 256, mime = 'image/png', quality = 0.9) {
   return new Promise((res, rej) => {
     const img = new Image(); const url = URL.createObjectURL(file);
     img.onload = () => {
       const k = Math.min(1, max / Math.max(img.width, img.height));
       const c = document.createElement('canvas'); c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
-      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height); URL.revokeObjectURL(url); res(c.toDataURL('image/png'));
+      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height); URL.revokeObjectURL(url); res(c.toDataURL(mime, quality));
     };
     img.onerror = () => rej(new Error('Gambar tidak valid')); img.src = url;
   });
@@ -18,6 +18,8 @@ function toDataUrl(file, max = 256) {
 export default function Pengaturan() {
   const { data, setData, reload } = useApi('/api/settings');
   const [pw, setPw] = useState({ current: '', next: '', full_name: '' });
+  const [bgVer, setBgVer] = useState(Date.now()), [hasBg, setHasBg] = useState(null);
+  useEffect(() => { fetch('/api/login-bg', { method: 'HEAD' }).then((r) => setHasBg(r.ok)).catch(() => setHasBg(false)); }, [bgVer]);
   if (!data) return <Spinner />;
   const s = data.settings;
   const set = (k, v) => setData({ ...data, settings: { ...s, [k]: v } });
@@ -25,6 +27,13 @@ export default function Pengaturan() {
     try { await api('/api/settings', { method: 'PUT', body: s }); toast('Pengaturan tersimpan. Muat ulang halaman untuk melihat tema baru.'); } catch (e) { toast(e.message, 'err'); }
   }
   async function logo(k, e) { const f = e.target.files[0]; if (f) { try { set(k, await toDataUrl(f)); } catch (x) { toast(x.message, 'err'); } } }
+  async function uploadBg(e) {
+    const file = e.target.files[0]; if (!file) return;
+    try { const image = await toDataUrl(file, 1280, 'image/jpeg', 0.7); await api('/api/login-bg', { method: 'PUT', body: { image } }); toast('Foto latar login tersimpan'); setBgVer(Date.now()); }
+    catch (x) { toast(x.message, 'err'); }
+    e.target.value = '';
+  }
+  async function removeBg() { try { await api('/api/login-bg', { method: 'DELETE' }); toast('Foto latar dihapus'); setBgVer(Date.now()); } catch (x) { toast(x.message, 'err'); } }
   async function savePw(e) {
     e.preventDefault();
     try { await api('/api/admin/password', { method: 'POST', body: pw }); toast('Profil/password diperbarui'); setPw({ current: '', next: '', full_name: '' }); } catch (x) { toast(x.message, 'err'); }
@@ -68,6 +77,12 @@ export default function Pengaturan() {
             <Field label="Password baru (min. 10 karakter, huruf + angka)"><input type="password" autoComplete="new-password" className="input" value={pw.next} onChange={(e) => setPw({ ...pw, next: e.target.value })} /></Field>
             <Btn>Perbarui</Btn>
           </form>
+        </Card>
+        <Card>
+          <h3 className="font-bold text-dark mb-2">Foto Latar Halaman Login</h3>
+          <p className="text-xs text-ink/60 mb-2">Opsional. Foto tampil di belakang ilustrasi pada halaman login (ditutup lapisan hijau). Otomatis diperkecil agar ringan.</p>
+          {hasBg && <img src={`/api/login-bg?v=${bgVer}`} alt="" className="h-28 w-full object-cover rounded-xl mb-2" />}
+          <div className="flex flex-wrap gap-2 items-center"><input type="file" accept="image/*" onChange={uploadBg} />{hasBg && <Btn variant="danger" type="button" onClick={removeBg}>Hapus Foto</Btn>}</div>
         </Card>
         <Card><h3 className="font-bold text-dark mb-2">Status Integrasi</h3>
           <ul className="text-sm space-y-1"><li>WhatsApp Cloud API: {data.env.wa ? '🟢 terhubung' : '🟡 simulasi'}</li><li>AI API: {data.env.ai ? '🟢 API key ada' : '🟡 mode aturan'}</li><li>Jadwal & jam presensi: menu <b>Jadwal & Sesi</b></li><li>Notifikasi WA: menu <b>WhatsApp</b></li></ul></Card>

@@ -25,7 +25,7 @@ export default function Rekap() {
   const count = (st) => rows.filter((r) => r.record?.status === st).length;
   return (
     <>
-      <PageHead title="Rekap & Verifikasi Manual" desc="Cadangan bila pengenalan wajah gagal, serta input izin/sakit" />
+      <PageHead title="Rekap & Verifikasi Manual" desc="Cadangan bila pengenalan wajah gagal, input izin/sakit, dan kirim WhatsApp manual ke orang tua" />
       <Card className="mb-4"><div className="grid sm:grid-cols-3 gap-2">
         <select className="input" value={f.activity} onChange={(e) => setF({ ...f, activity: e.target.value })}><option value="zuhur">Salat Zuhur</option><option value="wirid">Wirid Remaja</option></select>
         <input type="date" className="input" value={f.date} onChange={(e) => setF({ ...f, date: e.target.value })} />
@@ -38,7 +38,7 @@ export default function Rekap() {
       </div></Card>
       <Card>
         {busy && !data ? <Spinner /> : (
-          <Table heads={['Nama', 'NIS', 'Kelas', 'Status', 'Jam', 'Metode', 'Ubah Status']}>
+          <Table heads={['Nama', 'NIS', 'Kelas', 'Status', 'Jam', 'Metode', 'Ubah Status', 'WhatsApp']}>
             {rows.map((s) => (
               <tr key={s.id}>
                 <td className="td font-semibold">{s.full_name}</td><td className="td">{s.nis}</td><td className="td">{s.kelas}</td>
@@ -50,6 +50,9 @@ export default function Rekap() {
                     <option value="">Pilih…</option>{Object.entries(STATUS_TEXT).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
                   </select>
                   {s.record && <button className="ml-2 text-red-600 text-xs font-semibold" onClick={() => clear(s)}>Hapus</button>}
+                </td>
+                <td className="td whitespace-nowrap">
+                  {s.wa?.ok ? <a className="text-primary font-semibold" target="_blank" rel="noopener noreferrer" href={`https://wa.me/${s.wa.phone}?text=${encodeURIComponent(s.wa.text)}`}>💬 Kirim ke orang tua</a> : <span className="text-xs text-ink/40" title={s.wa?.reason}>{s.record ? '— ' + (s.wa?.reason || '') : '-'}</span>}
                 </td>
               </tr>
             ))}
