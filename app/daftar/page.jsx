@@ -187,3 +187,4 @@ export default function Daftar() {
 function scanWrapper(face, setFace, scanFace) {
   return () => { if (face) setFace(null); scanFace(); };
 }
+

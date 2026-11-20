@@ -12,6 +12,7 @@ export default function Siswa() {
   const { data, loading, reload } = useApi(`/api/siswa?${qs}`);
   const cls = useApi('/api/crud/classes'), dep = useApi('/api/crud/departments');
   const [edit, setEdit] = useState(null), [view, setView] = useState(null), [face, setFace] = useState(null), [imp, setImp] = useState(null);
+  const [akun, setAkun] = useState(null), [akunRes, setAkunRes] = useState(null), [akunIn, setAkunIn] = useState({ username: '', password: '' }), [akunBusy, setAkunBusy] = useState(false);
   const [qDebounce, setQ] = useState('');
   useEffect(() => { const t = setTimeout(() => setF((x) => ({ ...x, q: qDebounce })), 350); return () => clearTimeout(t); }, [qDebounce]);
 
@@ -49,12 +50,37 @@ export default function Siswa() {
   async function doImport() {
     try { const r = await api('/api/siswa/import', { method: 'POST', body: { rows: imp.rows } }); setImp({ ...imp, result: r }); reload(); } catch (x) { toast(x.message, 'err'); }
   }
+  function openAkun(s) { setAkun(s); setAkunRes(null); setAkunIn({ username: s.account?.username || s.nis || '', password: '' }); }
+  async function akunAction(action, extra = {}) {
+    setAkunBusy(true);
+    try {
+      const r = await api(`/api/siswa/${akun.id}/akun`, { method: 'POST', body: { action, ...extra } });
+      setAkunRes(r.password ? { username: r.username, password: r.password } : null);
+      toast('Berhasil');
+      const list = await api(`/api/siswa?${qs}`);
+      reload();
+      const fresh = list.find((x) => x.id === akun.id);
+      if (fresh) { setAkun(fresh); setAkunIn({ username: fresh.account?.username || fresh.nis || '', password: '' }); }
+    } catch (x) { toast(x.message, 'err'); }
+    setAkunBusy(false);
+  }
+  async function akunMassal() {
+    if (!(await confirmBox('Buat akun untuk SEMUA siswa aktif yang belum punya akun? Username = NIS, sandi sementara acak. Daftar sandi hanya ditampilkan SEKALI (diunduh sebagai Excel).'))) return;
+    try {
+      const r = await api('/api/siswa/akun-massal', { method: 'POST', body: {} });
+      if (r.created.length) await downloadXlsx('akun-siswa-sandi-sementara.xlsx', r.created, 'Akun');
+      toast(`${r.created.length} akun dibuat${r.skipped.length ? `, ${r.skipped.length} dilewati` : ''}${r.remaining ? `. Masih ada ${r.remaining} siswa — klik lagi.` : ''}`);
+      if (r.skipped.length) window.alert('Dilewati:\n' + r.skipped.slice(0, 15).join('\n'));
+      reload();
+    } catch (x) { toast(x.message, 'err'); }
+  }
   const rows = data || [];
   return (
     <>
       <PageHead title="Data Siswa" desc={`${rows.length} siswa`}>
         <Btn onClick={() => openEdit(null)}>+ Tambah Siswa</Btn>
         <label className="btn btn-ghost cursor-pointer">⬆ Impor Excel<input type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={pickFile} /></label>
+        <Btn variant="ghost" onClick={akunMassal}>👥 Akun Massal</Btn>
         <Btn variant="ghost" onClick={exportX}>⬇ Ekspor Excel</Btn>
         <Btn variant="ghost" onClick={() => window.print()}>🖨 PDF/Cetak</Btn>
       </PageHead>
@@ -66,15 +92,17 @@ export default function Siswa() {
       </div></Card>
       <Card>
         {loading ? <Spinner /> : !rows.length ? <Empty>Belum ada siswa. Tambah manual atau impor Excel.</Empty> : (
-          <Table heads={['Foto', 'NIS', 'Nama', 'Kelas', 'Jurusan', 'Status', 'Wajah', 'Aksi']}>
+          <Table heads={['Foto', 'NIS', 'Nama', 'Kelas', 'Jurusan', 'Status', 'Wajah', 'Akun', 'Aksi']}>
             {rows.map((s) => (
               <tr key={s.id}>
                 <td className="td">{s.face_samples ? <img src={`/api/siswa/${s.id}/foto?v=${encodeURIComponent(s.updated_at)}`} alt="" className="w-10 h-10 rounded-full object-cover bg-light" /> : <div className="w-10 h-10 rounded-full bg-light" />}</td>
                 <td className="td">{s.nis}</td><td className="td font-semibold">{s.full_name}</td><td className="td">{s.classes?.name || '-'}</td><td className="td">{s.departments?.name || '-'}</td>
                 <td className="td"><span className={`badge ${s.status === 'aktif' ? 'bg-emerald/20 text-dark' : 'bg-gray-200'}`}>{s.status}</span></td>
                 <td className="td">{s.face_samples ? <span className="badge bg-emerald/20 text-dark">✔ {s.face_samples} sampel</span> : <span className="badge bg-red-100 text-red-700">Belum</span>}</td>
+                <td className="td">{s.account ? <span className={`badge ${s.account.is_active ? 'bg-emerald/20 text-dark' : 'bg-gray-200'}`}>{s.account.username}{s.account.must_change ? ' · sandi sementara' : ''}</span> : <span className="badge bg-gray-200">Belum</span>}</td>
                 <td className="td whitespace-nowrap space-x-3">
                   <button className="text-primary font-semibold" onClick={() => setView(s)}>Detail</button>
+                  <button className="text-primary font-semibold" onClick={() => openAkun(s)}>Akun</button>
                   <button className="text-primary font-semibold" onClick={() => openEdit(s)}>Ubah</button>
                   <button className="text-primary font-semibold" onClick={() => setFace(s)}>{s.face_samples ? 'Daftar Ulang' : 'Daftarkan'} Wajah</button>
                   <button className="text-red-600 font-semibold" onClick={() => del(s)}>Hapus</button>
@@ -113,6 +141,61 @@ export default function Siswa() {
 
       <Modal open={!!face} onClose={() => setFace(null)} title="Pendaftaran Wajah" wide>
         {face && <FaceRegister student={face} onDone={() => { setFace(null); reload(); }} />}
+      </Modal>
+
+      <Modal open={!!akun} onClose={() => { setAkun(null); setAkunRes(null); }} title="Akun Portal Siswa" wide>
+        {akun && <div className="space-y-4 text-sm">
+          <div><b>{akun.full_name}</b> · NIS {akun.nis} · {akun.classes?.name || '-'}</div>
+          <p className="text-xs text-ink/60">Akun ini hanya untuk <b>melihat riwayat presensi</b> di <code>/portal</code>. Presensi tetap lewat wajah. Sandi tersimpan ter-hash, jadi admin tidak bisa melihat sandi lama — hanya membuat yang baru.</p>
+
+          {akunRes && (
+            <div className="rounded-2xl bg-gold/25 border border-gold p-4">
+              <div className="font-bold text-dark">Sandi sementara (tampil SEKALI — catat / berikan ke siswa)</div>
+              <div className="mt-1">Username: <b className="select-all">{akunRes.username}</b></div>
+              <div>Sandi: <b className="select-all text-lg tracking-wider">{akunRes.password}</b></div>
+              <div className="text-xs mt-1">Siswa wajib menggantinya saat login pertama.</div>
+              <Btn variant="ghost" className="mt-2" onClick={() => navigator.clipboard?.writeText(`Username: ${akunRes.username}\nSandi: ${akunRes.password}`).then(() => toast('Disalin'))}>📋 Salin</Btn>
+            </div>
+          )}
+
+          {!akun.account ? (
+            <div className="space-y-3">
+              <div className="grid sm:grid-cols-2 gap-3">
+                <Field label="Username (default: NIS)"><input className="input" value={akunIn.username} onChange={(e) => setAkunIn({ ...akunIn, username: e.target.value })} /></Field>
+                <Field label="Sandi (kosongkan = acak otomatis)"><input className="input" value={akunIn.password} onChange={(e) => setAkunIn({ ...akunIn, password: e.target.value })} /></Field>
+              </div>
+              <Btn disabled={akunBusy} onClick={() => akunAction('create', { username: akunIn.username, password: akunIn.password || undefined })}>➕ Buat Akun</Btn>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              <div className="grid sm:grid-cols-3 gap-2 text-xs">
+                <div className="rounded-xl bg-light p-3"><div className="opacity-60">Username</div><b>{akun.account.username}</b></div>
+                <div className="rounded-xl bg-light p-3"><div className="opacity-60">Status</div><b>{akun.account.is_active ? 'Aktif' : 'Nonaktif'}{akun.account.must_change ? ' · wajib ganti sandi' : ''}</b></div>
+                <div className="rounded-xl bg-light p-3"><div className="opacity-60">Login terakhir</div><b>{akun.account.last_login_at ? new Date(akun.account.last_login_at).toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' }) : 'Belum pernah'}</b></div>
+              </div>
+
+              <div className="rounded-2xl border border-emerald/20 p-3 space-y-2">
+                <b>Lupa sandi → Reset</b>
+                <div className="flex flex-wrap gap-2">
+                  <Btn disabled={akunBusy} onClick={() => akunAction('reset')}>🔄 Reset Sandi (acak)</Btn>
+                </div>
+                <div className="flex gap-2"><input className="input" placeholder="atau ketik sandi sementara sendiri (min. 8, huruf+angka)" value={akunIn.password} onChange={(e) => setAkunIn({ ...akunIn, password: e.target.value })} />
+                  <Btn variant="ghost" disabled={akunBusy || !akunIn.password} onClick={() => akunAction('set_password', { password: akunIn.password }).then(() => setAkunRes({ username: akun.account.username, password: akunIn.password }))}>Atur</Btn></div>
+              </div>
+
+              <div className="rounded-2xl border border-emerald/20 p-3 space-y-2">
+                <b>Ganti Username</b>
+                <div className="flex gap-2"><input className="input" value={akunIn.username} onChange={(e) => setAkunIn({ ...akunIn, username: e.target.value })} />
+                  <Btn variant="ghost" disabled={akunBusy} onClick={() => akunAction('set_username', { username: akunIn.username })}>Simpan</Btn></div>
+              </div>
+
+              <div className="flex flex-wrap gap-2">
+                <Btn variant="ghost" disabled={akunBusy} onClick={() => akunAction('toggle', { is_active: !akun.account.is_active })}>{akun.account.is_active ? '⏸ Nonaktifkan Akun' : '▶ Aktifkan Akun'}</Btn>
+                <Btn variant="danger" disabled={akunBusy} onClick={async () => { if (await confirmBox('Hapus akun portal siswa ini? (Data presensi tidak terhapus)')) akunAction('delete'); }}>🗑 Hapus Akun</Btn>
+              </div>
+            </div>
+          )}
+        </div>}
       </Modal>
 
       <Modal open={!!imp} onClose={() => setImp(null)} title="Impor Siswa dari Excel">
