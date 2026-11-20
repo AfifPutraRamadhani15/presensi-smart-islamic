@@ -1,7 +1,7 @@
 import bcrypt from 'bcryptjs';
 import { db, must } from '@/lib/db';
 import { handle, HttpError } from '@/lib/http';
-import { requireStudent } from '@/lib/studentAuth';
+import { requireStudent } from '@/lib/portalAuth';
 import { checkPassword, hashPassword } from '@/lib/accounts';
 
 export const dynamic = 'force-dynamic';

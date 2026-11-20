@@ -1,6 +1,6 @@
 import { db, must } from '@/lib/db';
 import { handle, HttpError } from '@/lib/http';
-import { requireStudent } from '@/lib/studentAuth';
+import { requireStudent } from '@/lib/portalAuth';
 import { buildReport } from '@/lib/report';
 import { nowParts, addDays } from '@/lib/time';
 

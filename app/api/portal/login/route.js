@@ -1,7 +1,7 @@
 import bcrypt from 'bcryptjs';
 import { db } from '@/lib/db';
 import { handle, HttpError, clientIp } from '@/lib/http';
-import { createStudentSession } from '@/lib/studentAuth';
+import { createStudentSession } from '@/lib/portalAuth';
 
 export const dynamic = 'force-dynamic';
 const fails = globalThis.__stuFails || (globalThis.__stuFails = new Map());
