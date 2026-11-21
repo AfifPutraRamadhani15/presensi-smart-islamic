@@ -195,6 +195,16 @@ export default function Siswa() {
               </div>
             </div>
           )}
+
+          <div className="rounded-2xl border border-red-200 p-3 space-y-2">
+            <b className="text-red-700">Face ID &amp; Daftar Ulang</b>
+            <div className="text-xs text-ink/60">Sampel wajah tersimpan: <b>{akun.face_samples}</b></div>
+            <div className="flex flex-wrap gap-2">
+              <Btn variant="ghost" disabled={akunBusy || !akun.face_samples} onClick={async () => { if (await confirmBox('Hapus Face ID siswa ini? Siswa tidak bisa presensi wajah sampai didaftarkan ulang.')) akunAction('delete_face'); }}>🧹 Hapus Face ID</Btn>
+              <Btn variant="danger" disabled={akunBusy} onClick={async () => { if (await confirmBox('RESET PENDAFTARAN: hapus akun + Face ID siswa ini. Data siswa & riwayat presensi TETAP. Siswa lalu bisa daftar ulang di halaman /daftar. Lanjutkan?')) akunAction('reset_registration'); }}>♻ Reset Pendaftaran</Btn>
+            </div>
+            <p className="text-[11px] text-ink/60">Ingin menghapus <b>semua</b> data siswa (termasuk riwayat presensi)? Gunakan tombol <b>Hapus</b> merah di baris siswa pada tabel.</p>
+          </div>
         </div>}
       </Modal>
 

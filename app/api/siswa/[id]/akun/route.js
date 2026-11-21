@@ -2,13 +2,14 @@ import { db, must } from '@/lib/db';
 import { handle, HttpError } from '@/lib/http';
 import { requireAdmin } from '@/lib/auth';
 import { audit } from '@/lib/log';
+import { invalidateFaceCache } from '@/lib/face';
 import { genPassword, cleanUsername, checkPassword, hashPassword } from '@/lib/accounts';
 
 export const dynamic = 'force-dynamic';
 
 const dupMsg = (e) => (e.code === '23505' ? 'Username sudah dipakai siswa lain' : e.message);
 
-// action: create | reset | set_password | set_username | toggle | delete
+// action: create | reset | set_password | set_username | toggle | delete | delete_face | reset_registration
 export const POST = handle(async (req, { params }) => {
   const admin = await requireAdmin(req);
   const b = await req.json();
@@ -59,6 +60,22 @@ export const POST = handle(async (req, { params }) => {
       need();
       must(await db().from('student_accounts').delete().eq('id', acc.id).select());
       await audit(admin, 'HAPUS_AKUN_SISWA', `${st.nis}`, req);
+      return { ok: true };
+    }
+    case 'delete_face': {
+      must(await db().from('face_data').delete().eq('student_id', st.id).select());
+      must(await db().from('students').update({ consent_biometric: false, consent_at: null }).eq('id', st.id).select());
+      invalidateFaceCache();
+      await audit(admin, 'HAPUS_FACE_ID', `${st.nis}`, req);
+      return { ok: true };
+    }
+    case 'reset_registration': {
+      // hapus akun + Face ID; data siswa & riwayat presensi TETAP — siswa bisa daftar ulang lewat /daftar
+      await db().from('student_accounts').delete().eq('student_id', st.id);
+      must(await db().from('face_data').delete().eq('student_id', st.id).select());
+      must(await db().from('students').update({ consent_biometric: false, consent_at: null }).eq('id', st.id).select());
+      invalidateFaceCache();
+      await audit(admin, 'RESET_PENDAFTARAN_SISWA', `${st.nis}`, req);
       return { ok: true };
     }
     default: throw new HttpError(400, 'Aksi tidak dikenal');

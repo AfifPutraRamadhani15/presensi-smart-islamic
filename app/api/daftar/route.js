@@ -61,28 +61,42 @@ export const POST = handle(async (req) => {
   const { data: cls } = await sb.from('classes').select('id,department_id,academic_year_id').eq('id', String(b.class_id || '')).maybeSingle();
   if (!cls) throw new HttpError(400, 'Kelas tidak ditemukan.');
 
-  const { data: dupNis } = await sb.from('students').select('id').eq('nis', nis).maybeSingle();
-  if (dupNis) throw new HttpError(409, 'NIS ini sudah terdaftar. Hubungi admin jika ada kesalahan.');
+  // NIS sudah ada?  -> boleh "klaim" HANYA bila belum punya akun & belum punya Face ID (mis. setelah admin menekan Reset Pendaftaran)
+  const { data: ex } = await sb.from('students').select('id,birth_date').eq('nis', nis).maybeSingle();
+  let claimId = null;
+  if (ex) {
+    const { data: exAcc } = await sb.from('student_accounts').select('id').eq('student_id', ex.id).maybeSingle();
+    if (exAcc) throw new HttpError(409, 'NIS ini sudah punya akun. Masuk lewat halaman login, pilih "Lupa kata sandi" bila lupa, atau hubungi admin.');
+    const { count } = await sb.from('face_data').select('id', { count: 'exact', head: true }).eq('student_id', ex.id);
+    if ((count || 0) > 0) throw new HttpError(409, 'NIS ini sudah terdaftar dengan data wajah. Minta admin menekan "Reset Pendaftaran" pada data siswamu, lalu daftar ulang.');
+    if (ex.birth_date && ex.birth_date !== birthDate) throw new HttpError(403, 'Tanggal lahir tidak cocok dengan data sekolah.');
+    claimId = ex.id;
+  }
   const { data: dupUser } = await sb.from('student_accounts').select('id').eq('username', username).maybeSingle();
   if (dupUser) throw new HttpError(409, 'Username (NIS) sudah dipakai. Hubungi admin.');
 
   // Cegah satu wajah didaftarkan dua kali dengan identitas berbeda
   const s = await getSettings();
   const dupFace = await matchDescriptor(descs[0], Number(s.face_threshold || 0.5), 0);
-  if (dupFace.matched) throw new HttpError(409, 'Wajah ini sudah terdaftar. Hubungi admin jika ada kesalahan.');
+  if (dupFace.matched && dupFace.student_id !== claimId) throw new HttpError(409, 'Wajah ini sudah terdaftar atas siswa lain. Hubungi admin jika ada kesalahan.');
 
-  const st = must(await sb.from('students').insert({
-    nis, full_name: nama, gender: b.gender, birth_place: birthPlace, birth_date: birthDate,
+  const fields = {
+    full_name: nama, gender: b.gender, birth_place: birthPlace, birth_date: birthDate,
     class_id: cls.id, department_id: cls.department_id, academic_year_id: cls.academic_year_id,
-    address, status: 'aktif', consent_biometric: true, consent_at: new Date().toISOString(), photo,
-  }).select('id').single());
+    address, consent_biometric: true, consent_at: new Date().toISOString(), photo,
+  };
+  let sid = claimId;
+  if (claimId) must(await sb.from('students').update(fields).eq('id', claimId).select('id'));
+  else sid = must(await sb.from('students').insert({ nis, status: 'aktif', ...fields }).select('id').single()).id;
 
   try {
-    must(await sb.from('parent_contacts').upsert({ student_id: st.id, parent_name: parentName, whatsapp: phone, consent_wa: !!b.consent_wa }, { onConflict: 'student_id' }));
-    must(await sb.from('face_data').insert(descs.map((d, i) => ({ student_id: st.id, embedding_enc: encryptJSON(d), sample_no: i + 1 }))));
-    must(await sb.from('student_accounts').insert({ student_id: st.id, username, password_hash: await hashPassword(password), must_change: false }));
+    must(await sb.from('parent_contacts').upsert({ student_id: sid, parent_name: parentName, whatsapp: phone, consent_wa: !!b.consent_wa }, { onConflict: 'student_id' }));
+    must(await sb.from('face_data').insert(descs.map((d, i) => ({ student_id: sid, embedding_enc: encryptJSON(d), sample_no: i + 1 }))));
+    must(await sb.from('student_accounts').insert({ student_id: sid, username, password_hash: await hashPassword(password), must_change: false }));
   } catch (e) {
-    await sb.from('students').delete().eq('id', st.id); // batalkan semuanya agar tidak ada data setengah jadi
+    // batalkan agar tidak ada data setengah jadi
+    if (claimId) { await sb.from('face_data').delete().eq('student_id', sid); await sb.from('student_accounts').delete().eq('student_id', sid); }
+    else await sb.from('students').delete().eq('id', sid);
     throw e;
   }
 

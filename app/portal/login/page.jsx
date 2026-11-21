@@ -37,7 +37,7 @@ export default function PortalLogin() {
         </div>
         {err && <div role="alert" className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-xl p-3">⚠ {err}</div>}
         <button className="btn btn-primary w-full !py-3" disabled={busy}>{busy ? 'Memproses…' : 'Masuk'}</button>
-        <p className="text-xs text-center text-ink/60">Lupa sandi? Minta admin/guru mereset sandimu.</p>
+        <div className="flex items-center justify-between text-sm font-semibold"><a href="/portal/lupa-sandi" className="text-primary">🔑 Lupa kata sandi?</a><a href="/daftar" className="text-primary">Belum punya akun? Daftar</a></div>
         <a href="/presensi" className="block text-center text-sm text-primary font-semibold">← Ke halaman presensi</a>
       </form>
     </main>
