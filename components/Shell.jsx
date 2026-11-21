@@ -16,10 +16,11 @@ const MENU = [
   { href: '/admin/log', label: 'Log Aktivitas', icon: '🛡️' },
   { href: '/admin/pengaturan', label: 'Pengaturan & Profil', icon: '⚙️' },
 ];
+// Urutan navigasi bawah (HP): Presensi tepat di TENGAH (urutan ke-3 dari 5)
 const BOTTOM = [
   { href: '/admin', label: 'Beranda', icon: '🏠' },
-  { href: '/presensi', label: 'Presensi', icon: '📷', big: true },
   { href: '/admin/siswa', label: 'Siswa', icon: '🎓' },
+  { href: '/presensi', label: 'Presensi', icon: '📷', big: true },
   { href: '/admin/laporan', label: 'Laporan', icon: '📊' },
   { href: '/admin/menu', label: 'Profil', icon: '👤' },
 ];
