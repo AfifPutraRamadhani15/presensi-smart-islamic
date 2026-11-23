@@ -6,24 +6,74 @@ export const dynamic = 'force-dynamic';
 
 export async function POST(req) {
   try {
-    const b = await req.json();
-    const nis = String(b.nis || '').trim();
-    const password = String(b.password || '');
-    const fail = () => NextResponse.json({ error: 'NIS atau password salah.' }, { status: 401 });
-    if (!nis || !password) return fail();
+    const body = await req.json().catch(() => ({}));
+    const nis = String(body.nis ?? body.username ?? '').trim();
+    const password = String(body.password ?? '');
+
+    const unauthorized = () =>
+      NextResponse.json(
+        { error: 'NIS atau kata sandi salah.' },
+        { status: 401 }
+      );
+
+    if (!nis || !password) {
+      return unauthorized();
+    }
 
     const sb = db();
-    const { data: st, error: e1 } = await sb.from('students').select('id,nis,full_name,active').eq('nis', nis).maybeSingle();
-    if (e1) throw e1;
-    if (!st || st.active === false) return fail();
 
-    const { data: acc, error: e2 } = await sb.from('student_accounts').select('password_hash').eq('student_id', st.id).maybeSingle();
-    if (e2) throw e2;
-    if (!acc || !verifyPassword(password, acc.password_hash)) return fail();
+    const { data: student, error: studentErr } = await sb
+      .from('students')
+      .select('id, nis, full_name, class_name, active')
+      .eq('nis', nis)
+      .maybeSingle();
 
-    await createStudentSession(st);
-    return NextResponse.json({ ok: true });
-  } catch (e) {
-    return NextResponse.json({ error: e.message || 'Gagal login' }, { status: 500 });
+    if (studentErr) {
+      throw studentErr;
+    }
+
+    if (!student || student.active === false) {
+      return unauthorized();
+    }
+
+    const { data: account, error: accountErr } = await sb
+      .from('student_accounts')
+      .select('password_hash, must_change')
+      .eq('student_id', student.id)
+      .maybeSingle();
+
+    if (accountErr) {
+      throw accountErr;
+    }
+
+    if (!account || !account.password_hash) {
+      return unauthorized();
+    }
+
+    const isValid = await Promise.resolve(
+      verifyPassword(password, account.password_hash)
+    );
+
+    if (!isValid) {
+      return unauthorized();
+    }
+
+    await Promise.resolve(createStudentSession(student));
+
+    return NextResponse.json({
+      ok: true,
+      must_change: Boolean(account.must_change),
+      student: {
+        id: student.id,
+        nis: student.nis,
+        full_name: student.full_name,
+        class_name: student.class_name ?? null,
+      },
+    });
+  } catch (err) {
+    return NextResponse.json(
+      { error: err?.message || 'Terjadi kesalahan saat memproses login.' },
+      { status: 500 }
+    );
   }
 }
