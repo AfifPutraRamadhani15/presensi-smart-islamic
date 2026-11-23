@@ -1,6 +1,7 @@
 'use client';
 import { Fragment, useEffect, useState } from 'react';
 import { api } from '@/lib/client';
+import IdleLogout from '@/components/IdleLogout';
 
 const ST = {
   hadir: { t: 'Hadir', c: 'bg-emerald/20 text-dark', i: '✅' },
@@ -282,6 +283,7 @@ export default function Portal() {
         <p className="text-[11px] text-ink/40 text-center pt-2">Data presensi hanya bisa diubah oleh admin sekolah.</p>
       </div>
 
+      <IdleLogout scope="siswa" pingUrl="/api/portal/ping" logoutUrl="/api/portal/logout" loginUrl="/portal/login" />
       <BottomNav tab={tab} onSelect={go} hidden={navHidden} />
     </main>
   );
