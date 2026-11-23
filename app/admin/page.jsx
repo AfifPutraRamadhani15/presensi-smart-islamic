@@ -1,9 +1,74 @@
 'use client';
-import { useApi, api, STATUS_COLOR, STATUS_TEXT, ACT_TEXT } from '@/lib/client';
+import { useState } from 'react';
+import { useApi, api, toast, STATUS_COLOR, STATUS_TEXT, ACT_TEXT } from '@/lib/client';
 import { Card, PageHead, Spinner, Stat, Table } from '@/components/ui';
 import { TwoBar, TwoLine, Compare, ClassBar, PctLine } from '@/components/Charts';
 
 const EMPTY_ACT = { hadir: 0, terlambat: 0, tidak_hadir: 0, has_session: false };
+
+const waktu = (iso) => new Date(iso).toLocaleString('id-ID', { timeZone: 'Asia/Jakarta', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false });
+
+// Konfirmasi akun siswa: akun baru harus disetujui admin sebelum bisa login.
+function Approvals() {
+  const { data, error, reload } = useApi('/api/siswa/persetujuan');
+  const [tab, setTab] = useState('menunggu'), [busy, setBusy] = useState(false), [err, setErr] = useState('');
+  const all = data?.rows || [];
+  const nWait = all.filter((r) => r.status === 'menunggu').length;
+  const nRej = all.filter((r) => r.status === 'ditolak').length;
+  const list = all.filter((r) => r.status === tab);
+
+  async function act(ids, action) {
+    if (!ids.length || busy) return;
+    if (action === 'tolak' && !window.confirm(ids.length > 1 ? `Tolak ${ids.length} akun ini?` : 'Tolak akun ini?')) return;
+    setBusy(true); setErr('');
+    try {
+      const r = await api('/api/siswa/persetujuan', { method: 'POST', body: { ids, action } });
+      toast(action === 'setujui' ? `${r.count} akun disetujui` : `${r.count} akun ditolak`);
+      await reload();
+    } catch (e) { setErr(e.message); }
+    setBusy(false);
+  }
+
+  if (error) return <div className="card text-red-600 text-sm mb-4">Gagal memuat konfirmasi akun siswa: {error}</div>;
+  if (!all.length) return null;
+
+  return (
+    <Card className={`mb-4 ${nWait ? '!bg-gold/20' : ''}`}>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h3 className="font-bold text-dark">🕒 Konfirmasi Akun Siswa</h3>
+        <div className="flex gap-1 p-1 rounded-xl bg-white/80">
+          {[['menunggu', `Menunggu (${nWait})`], ['ditolak', `Ditolak (${nRej})`]].map(([k, l]) => (
+            <button key={k} type="button" onClick={() => setTab(k)} className={`rounded-lg px-3 py-1 text-xs font-bold transition ${tab === k ? 'gloss' : 'text-dark'}`}><span className="relative">{l}</span></button>
+          ))}
+        </div>
+      </div>
+      <p className="text-xs text-ink/60 mt-1">{tab === 'menunggu' ? 'Siswa di bawah ini belum bisa login sebelum kamu menyetujui akunnya.' : 'Akun yang ditolak tetap tersimpan dan bisa disetujui kembali.'}</p>
+
+      {err && <div role="alert" className="mt-2 text-sm text-red-700 bg-red-50 border border-red-200 rounded-xl p-2">⚠ {err}</div>}
+
+      {tab === 'menunggu' && nWait > 1 && (
+        <button type="button" disabled={busy} onClick={() => act(list.map((r) => r.id), 'setujui')} className="btn btn-primary !py-1.5 !px-3 text-xs mt-3">✔ Setujui semua ({nWait})</button>
+      )}
+
+      {!list.length ? <div className="text-sm text-ink/50 py-6 text-center">Tidak ada akun di daftar ini.</div> : (
+        <ul className="divide-y divide-emerald/10 mt-2">
+          {list.map((r) => (
+            <li key={r.id} className="flex flex-wrap items-center gap-x-3 gap-y-2 py-2.5">
+              <div className="min-w-0 flex-1 basis-48">
+                <div className="font-bold text-sm text-ink truncate">{r.nama}</div>
+                <div className="text-[11px] text-ink/60 truncate">NIS {r.nis} · {r.kelas} · daftar {waktu(r.created_at)}</div>
+              </div>
+              <div className="flex gap-2 shrink-0">
+                <button type="button" disabled={busy} onClick={() => act([r.id], 'setujui')} className="btn btn-primary !py-1.5 !px-3 text-xs">Setujui</button>
+                {tab === 'menunggu' && <button type="button" disabled={busy} onClick={() => act([r.id], 'tolak')} className="btn btn-danger !py-1.5 !px-3 text-xs">Tolak</button>}
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </Card>
+  );
+}
 
 export default function Dashboard() {
   const { data: d, error, loading, reload } = useApi('/api/dashboard');
@@ -23,6 +88,8 @@ export default function Dashboard() {
   return (
     <>
       <PageHead title="Dashboard" desc="Data real-time dari database"><button className="btn btn-ghost" onClick={reload}>↻ Muat ulang</button></PageHead>
+
+      <Approvals />
 
       {notifs.length > 0 && (
         <Card className="mb-4 !bg-gold/20">

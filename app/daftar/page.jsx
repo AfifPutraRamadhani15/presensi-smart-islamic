@@ -148,7 +148,7 @@ export default function Daftar() {
         <div className="relative z-10 card text-ink max-w-md w-full space-y-3 pop">
           <div className="text-6xl">✅</div>
           <h1 className="text-2xl font-extrabold text-dark">Pendaftaran Berhasil</h1>
-          <p className="text-sm">Data dan wajah <b>{f.nama}</b> sudah tersimpan. Kamu sudah bisa presensi dengan Face ID.</p>
+          <p className="text-sm">Data dan wajah <b>{f.nama}</b> sudah tersimpan. Akun portalmu <b>menunggu konfirmasi admin</b> sebelum bisa dipakai untuk login.</p>
           <div className="rounded-2xl bg-light p-3 text-sm text-left">
             <div>Username portal: <b>{f.nis.trim().toLowerCase()}</b></div>
             <div>Sandi: yang kamu buat tadi</div>

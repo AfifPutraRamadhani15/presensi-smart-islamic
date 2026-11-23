@@ -29,8 +29,9 @@ export const POST = handle(async (req) => {
 
   const bad = () => new HttpError(400, 'Data tidak cocok. Periksa NIS & tanggal lahir, atau gunakan "Minta admin mereset".');
   if (!st || st.status !== 'aktif' || !st.birth_date || st.birth_date !== String(b.birth_date || '')) throw bad();
-  const { data: acc } = await sb.from('student_accounts').select('id').eq('student_id', st.id).maybeSingle();
+  const { data: acc } = await sb.from('student_accounts').select('id,approval_status').eq('student_id', st.id).maybeSingle();
   if (!acc) throw new HttpError(400, 'Siswa ini belum punya akun. Silakan daftar akun lebih dulu atau hubungi admin.');
+  if (acc.approval_status && acc.approval_status !== 'disetujui') throw new HttpError(403, 'Akunmu belum dikonfirmasi admin.');
 
   const d = b.descriptor;
   if (!Array.isArray(d) || d.length !== 128 || !d.every((x) => typeof x === 'number' && Number.isFinite(x))) throw new HttpError(400, 'Data wajah tidak valid. Ulangi pemindaian.');
