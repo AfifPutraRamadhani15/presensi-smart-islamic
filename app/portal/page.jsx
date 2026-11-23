@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { Fragment, useEffect, useState } from 'react';
 import { api } from '@/lib/client';
 
 const ST = {
@@ -10,7 +10,13 @@ const ST = {
   alfa: { t: 'Alfa', c: 'bg-red-100 text-red-700', i: '❌' },
   belum: { t: 'Belum', c: 'bg-gray-200 text-gray-600', i: '⏳' },
 };
-const TABS = [['ringkasan', '🏠', 'Ringkasan'], ['zuhur', '🕌', 'Zuhur'], ['wirid', '📖', 'Wirid'], ['peringkat', '🏆', 'Peringkat']];
+const TABS = [
+  ['ringkasan', '🏠', 'Ringkasan'],
+  ['zuhur', '🕌', 'Zuhur'],
+  ['wirid', '📖', 'Wirid'],
+  ['peringkat', '🏆', 'Peringkat'],
+  ['profil', '👤', 'Profil'],
+];
 
 const initials = (n) => n.split(' ').filter(Boolean).slice(0, 2).map((x) => x[0]).join('').toUpperCase();
 const tgl = (d) => new Date(d + 'T00:00:00Z').toLocaleDateString('id-ID', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
@@ -96,11 +102,105 @@ function Board({ d }) {
   );
 }
 
+function Profile({ d, onLogout }) {
+  const p = d.peringkat;
+  const rows = [
+    ['NIS', d.siswa.nis],
+    ['Kelas', d.siswa.kelas],
+    ['Jurusan', d.siswa.jurusan],
+    ['Semester', d.semester],
+    ['Poin saat ini', d.poin],
+    ...(p.aktif ? [['Peringkat', `#${p.rank} dari ${p.dari}`]] : []),
+  ];
+  return (
+    <div className="space-y-3">
+      <section className="card !p-5 text-center">
+        <div className="w-20 h-20 mx-auto rounded-3xl gloss shadow-soft flex items-center justify-center text-2xl font-extrabold"><span className="relative">{initials(d.siswa.nama)}</span></div>
+        <h2 className="mt-3 text-lg font-extrabold text-dark break-words">{d.siswa.nama}</h2>
+        <div className="text-xs text-ink/60 mt-0.5">Siswa · {d.siswa.kelas}</div>
+      </section>
+
+      <section className="card !p-3 sm:!p-4">
+        <h3 className="font-bold text-dark px-1">Data Diri</h3>
+        <dl className="divide-y divide-emerald/10 mt-1">
+          {rows.map(([k, v]) => (
+            <div key={k} className="flex items-start justify-between gap-4 py-2.5 px-1 text-sm">
+              <dt className="text-ink/60 shrink-0">{k}</dt>
+              <dd className="font-semibold text-dark text-right break-words">{v}</dd>
+            </div>
+          ))}
+        </dl>
+      </section>
+
+      <section className="card !p-3 sm:!p-4 space-y-2">
+        <h3 className="font-bold text-dark px-1">Akun</h3>
+        <a href="/portal/ganti-sandi" className="btn btn-ghost w-full !py-3 justify-start">🔑 Ganti kata sandi</a>
+        <button onClick={onLogout} className="btn btn-danger w-full !py-3">Keluar dari akun</button>
+      </section>
+    </div>
+  );
+}
+
+// Navigasi bawah mengambang: kapsul kaca, pembatas tipis antar menu, sembunyi saat scroll turun.
+function BottomNav({ tab, onSelect, hidden }) {
+  return (
+    <nav
+      aria-label="Menu utama"
+      className={`no-print fixed inset-x-0 z-40 px-4 pointer-events-none transition-transform duration-300 ease-out motion-reduce:transition-none ${hidden ? 'translate-y-[170%]' : 'translate-y-0'}`}
+      style={{ bottom: 'calc(env(safe-area-inset-bottom, 0px) + 12px)' }}
+    >
+      <div className="pointer-events-auto mx-auto max-w-md flex items-stretch rounded-[1.75rem] bg-white/85 backdrop-blur-xl border border-white/70 shadow-[0_12px_32px_-8px_rgba(6,78,59,0.4)] p-1.5">
+        {TABS.map(([k, ic, l], i) => {
+          const on = tab === k;
+          const prevOn = i > 0 && TABS[i - 1][0] === tab;
+          return (
+            <Fragment key={k}>
+              {i > 0 && <span aria-hidden="true" className={`self-center w-px h-7 bg-emerald/25 transition-opacity ${on || prevOn ? 'opacity-0' : 'opacity-100'}`} />}
+              <button
+                type="button"
+                onClick={() => onSelect(k)}
+                aria-current={on ? 'page' : undefined}
+                className={`flex-1 min-w-0 flex flex-col items-center justify-center gap-0.5 rounded-[1.25rem] py-2 transition-all duration-200 motion-reduce:transition-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary ${on ? 'gloss shadow-soft scale-[1.04]' : 'text-ink/60 active:scale-95'}`}
+              >
+                <span className={`relative leading-none transition-transform duration-200 ${on ? 'text-xl -translate-y-0.5' : 'text-xl'}`}>{ic}</span>
+                <span className={`relative text-[10px] font-bold leading-none ${on ? '' : 'text-ink/60'}`}>{l}</span>
+              </button>
+            </Fragment>
+          );
+        })}
+      </div>
+    </nav>
+  );
+}
+
 export default function Portal() {
   const [d, setD] = useState(null), [err, setErr] = useState(''), [tab, setTab] = useState('ringkasan');
+  const [navHidden, setNavHidden] = useState(false);
+
   useEffect(() => {
     api('/api/portal/me').then((r) => { if (r.must_change) window.location.href = '/portal/ganti-sandi'; else setD(r); }).catch((e) => setErr(e.message));
   }, []);
+
+  // Sembunyikan navigasi saat scroll turun, tampilkan lagi saat scroll naik / di ujung halaman.
+  useEffect(() => {
+    let last = window.scrollY, ticking = false;
+    const onScroll = () => {
+      if (ticking) return;
+      ticking = true;
+      requestAnimationFrame(() => {
+        const y = window.scrollY;
+        const max = document.documentElement.scrollHeight - window.innerHeight;
+        if (y <= 40 || y >= max - 40) setNavHidden(false);
+        else if (y > last + 6) setNavHidden(true);
+        else if (y < last - 6) setNavHidden(false);
+        last = y; ticking = false;
+      });
+    };
+    window.addEventListener('scroll', onScroll, { passive: true });
+    return () => window.removeEventListener('scroll', onScroll);
+  }, []);
+
+  function go(k) { setTab(k); setNavHidden(false); window.scrollTo({ top: 0, behavior: 'smooth' }); }
   async function logout() { await api('/api/portal/logout', { method: 'POST' }); window.location.href = '/portal/login'; }
 
   if (err) return <main className="p-6 max-w-md mx-auto"><div className="card text-red-600 text-sm">{err}</div><button className="btn btn-ghost mt-3" onClick={logout}>Keluar</button></main>;
@@ -112,7 +212,7 @@ export default function Portal() {
   const persen = sesiTotal ? Math.round((hadirTotal / sesiTotal) * 100) : 0;
 
   return (
-    <main className="min-h-screen bg-surface pb-10">
+    <main className="min-h-screen bg-surface pb-36">
       {/* HEADER */}
       <header className="gloss rounded-b-[2rem] pt-[max(1rem,env(safe-area-inset-top))] pb-16 px-4">
         <div className="relative mx-auto max-w-3xl">
@@ -123,10 +223,6 @@ export default function Portal() {
               <h1 className="text-lg sm:text-xl font-extrabold leading-tight break-words">{d.siswa.nama}</h1>
               <div className="text-xs sm:text-sm opacity-90">NIS {d.siswa.nis} · {d.siswa.kelas}</div>
               <div className="text-[11px] opacity-75 truncate">{d.siswa.jurusan}</div>
-            </div>
-            <div className="flex flex-col gap-1.5 shrink-0">
-              <a href="/portal/ganti-sandi" className="btn bg-white/20 !py-1 !px-3 text-xs">🔑 Sandi</a>
-              <button onClick={logout} className="btn bg-white/20 !py-1 !px-3 text-xs">Keluar</button>
             </div>
           </div>
         </div>
@@ -159,17 +255,6 @@ export default function Portal() {
           </details>
         </section>
 
-        {/* TAB */}
-        <nav className="sticky top-0 z-20 -mx-1 px-1 py-1 bg-surface/90 backdrop-blur">
-          <div className="grid grid-cols-4 gap-1 p-1 rounded-2xl bg-white shadow-soft">
-            {TABS.map(([k, ic, l]) => (
-              <button key={k} onClick={() => setTab(k)} className={`rounded-xl py-2 text-[11px] sm:text-sm font-bold transition flex flex-col sm:flex-row items-center justify-center gap-0.5 sm:gap-1.5 ${tab === k ? 'gloss' : 'text-dark'}`}>
-                <span className="relative text-base leading-none">{ic}</span><span className="relative">{l}</span>
-              </button>
-            ))}
-          </div>
-        </nav>
-
         {tab === 'ringkasan' && (
           <div className="space-y-3">
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
@@ -182,7 +267,7 @@ export default function Portal() {
                 : <ul className="divide-y divide-emerald/10">{d.terbaru.map((r, i) => <Row key={i} r={r} label={r.k === 'zuhur' ? 'Salat Zuhur' : 'Wirid Remaja'} />)}</ul>}
             </div>
             {p.aktif && p.top.length > 0 && (
-              <button onClick={() => setTab('peringkat')} className="card !p-3 w-full text-left flex items-center gap-3">
+              <button onClick={() => go('peringkat')} className="card !p-3 w-full text-left flex items-center gap-3">
                 <div className="text-3xl">🏆</div>
                 <div className="flex-1 min-w-0"><div className="font-bold text-dark text-sm">Juara saat ini: {p.top[0].nama}</div><div className="text-[11px] text-ink/60">{p.top[0].kelas} · {p.top[0].poin} poin — lihat peringkat lengkap →</div></div>
               </button>
@@ -192,9 +277,12 @@ export default function Portal() {
         {tab === 'zuhur' && <Activity d={d} k="zuhur" />}
         {tab === 'wirid' && <Activity d={d} k="wirid" />}
         {tab === 'peringkat' && <Board d={d} />}
+        {tab === 'profil' && <Profile d={d} onLogout={logout} />}
 
         <p className="text-[11px] text-ink/40 text-center pt-2">Data presensi hanya bisa diubah oleh admin sekolah.</p>
       </div>
+
+      <BottomNav tab={tab} onSelect={go} hidden={navHidden} />
     </main>
   );
 }
