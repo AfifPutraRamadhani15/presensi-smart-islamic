@@ -1,67 +1,160 @@
-import { NextResponse } from 'next/server';
-import { db } from '@/lib/db';
-import { createStudentSession } from '@/lib/studentAuth';
-import { verifyPassword } from '@/lib/crypto'; // sesuaikan jika verifyPassword ada di lib lain
+  'use client';
 
-export const dynamic = 'force-dynamic';
+import { useState } from 'react';
 
-export async function POST(req) {
-  try {
-    const body = await req.json().catch(() => ({}));
-    const usernameOrNis = String(body.nis ?? body.username ?? '').trim();
-    const password = String(body.password ?? '');
+const field = {
+  color: '#172B24',
+  WebkitTextFillColor: '#172B24',
+  backgroundColor: '#FFFFFF',
+  caretColor: '#087F5B',
+  colorScheme: 'light',
+};
 
-    const unauthorized = () =>
-      NextResponse.json(
-        { error: 'NIS/Username atau kata sandi salah.' },
-        { status: 401 }
-      );
+export default function PortalLogin() {
+  const [f, setF] = useState({ username: '', password: '' });
+  const [err, setErr] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [show, setShow] = useState(false);
 
-    if (!usernameOrNis || !password) {
-      return unauthorized();
+  async function submit(e) {
+    e.preventDefault();
+    if (busy) return;
+
+    setBusy(true);
+    setErr('');
+
+    const cleanNis = String(f.username || '').trim();
+    const password = String(f.password || '');
+
+    try {
+      const res = await fetch('/api/portal/login', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          nis: cleanNis,
+          username: cleanNis,
+          password,
+        }),
+      });
+
+      const data = await res.json().catch(() => ({}));
+
+      if (!res.ok) {
+        setErr(
+          data?.error ||
+            `Gagal masuk (HTTP ${res.status}). Pastikan endpoint /api/portal/login mendukung POST.`
+        );
+        setBusy(false);
+        return;
+      }
+
+      window.location.href = data?.must_change
+        ? '/portal/ganti-sandi'
+        : '/portal';
+    } catch (x) {
+      setErr(x?.message || 'Terjadi gangguan jaringan saat mencoba masuk.');
+      setBusy(false);
     }
-
-    const sb = db();
-
-    const { data: student, error: studentErr } = await sb
-      .from('students')
-      .select('id, nis, full_name, status')
-      .eq('nis', usernameOrNis)
-      .maybeSingle();
-
-    if (studentErr) throw studentErr;
-    if (!student || student.status === 'nonaktif') {
-      return unauthorized();
-    }
-
-    const { data: account, error: accountErr } = await sb
-      .from('student_accounts')
-      .select('id, student_id, username, password_hash, must_change, is_active')
-      .eq('student_id', student.id)
-      .maybeSingle();
-
-    if (accountErr) throw accountErr;
-    if (!account || !account.password_hash || account.is_active === false) {
-      return unauthorized();
-    }
-
-    const okPass = await Promise.resolve(
-      verifyPassword(password, account.password_hash)
-    );
-    if (!okPass) {
-      return unauthorized();
-    }
-
-    await createStudentSession(account);
-
-    return NextResponse.json({
-      ok: true,
-      must_change: Boolean(account.must_change),
-    });
-  } catch (err) {
-    return NextResponse.json(
-      { error: err?.message || 'Terjadi kesalahan saat login portal.' },
-      { status: 500 }
-    );
   }
+
+  return (
+    <main className="min-h-screen gloss flex items-center justify-center p-4">
+      <form
+        onSubmit={submit}
+        className="relative z-10 card w-full max-w-sm space-y-4"
+        style={{ color: '#172B24' }}
+      >
+        <div className="text-center">
+          <img
+            src="/icons/icon-192.png"
+            alt="Logo Portal Siswa"
+            className="w-16 h-16 mx-auto rounded-2xl shadow-soft"
+          />
+          <h1 className="mt-2 text-xl font-extrabold text-dark">Portal Siswa</h1>
+          <p className="text-xs text-ink/60">
+            Lihat riwayat presensi Salat Zuhur &amp; Wirid Remaja milikmu.
+          </p>
+        </div>
+
+        <div>
+          <label htmlFor="u" className="label">
+            Username (NIS)
+          </label>
+          <input
+            id="u"
+            name="username"
+            type="text"
+            inputMode="numeric"
+            className="input !py-3"
+            style={field}
+            autoComplete="username"
+            value={f.username}
+            onChange={(e) => setF({ ...f, username: e.target.value })}
+            required
+          />
+        </div>
+
+        <div>
+          <label htmlFor="p" className="label">
+            Sandi
+          </label>
+          <div className="relative">
+            <input
+              id="p"
+              name="password"
+              className="input !py-3 !pr-24"
+              style={field}
+              type={show ? 'text' : 'password'}
+              autoComplete="current-password"
+              value={f.password}
+              onChange={(e) => setF({ ...f, password: e.target.value })}
+              required
+            />
+            <button
+              type="button"
+              onClick={() => setShow((prev) => !prev)}
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-xs font-bold text-primary px-2 py-1"
+            >
+              {show ? 'Sembunyikan' : 'Tampilkan'}
+            </button>
+          </div>
+        </div>
+
+        {err && (
+          <div
+            role="alert"
+            className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-xl p-3"
+          >
+            ⚠ {err}
+          </div>
+        )}
+
+        <button
+          type="submit"
+          className="btn btn-primary w-full !py-3"
+          disabled={busy}
+        >
+          {busy ? 'Memproses…' : 'Masuk'}
+        </button>
+
+        <div className="flex items-center justify-between text-sm font-semibold">
+          <a href="/portal/lupa-sandi" className="text-primary">
+            🔑 Lupa kata sandi?
+          </a>
+          <a href="/daftar" className="text-primary">
+            Belum punya akun? Daftar
+          </a>
+        </div>
+
+        <a
+          href="/presensi"
+          className="block text-center text-sm text-primary font-semibold"
+        >
+          ← Ke halaman presensi
+        </a>
+      </form>
+    </main>
+  );
 }
