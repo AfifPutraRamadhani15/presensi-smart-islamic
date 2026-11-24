@@ -24,6 +24,20 @@ export const GET = handle(async () => {
 
 const okVec = (d) => Array.isArray(d) && d.length === 128 && d.every((x) => typeof x === 'number' && Number.isFinite(x));
 
+// Mencari siswa lain yang wajahnya cocok. Hasil pencocokan memakai cache di memori (per instance server),
+// yang bisa usang setelah siswa dihapus admin atau setelah pendaftaran gagal. Karena itu pemiliknya
+// dipastikan benar-benar ada di database; kalau tidak ada, cache disegarkan lalu dicek ulang sekali.
+async function faceOwner(vec, threshold, claimId) {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const m = await matchDescriptor(vec, threshold, 0);
+    if (!m.matched || m.student_id === claimId) return null;
+    const { data: owner } = await db().from('students').select('id,nis,full_name').eq('id', m.student_id).maybeSingle();
+    if (owner) return owner;
+    invalidateFaceCache();
+  }
+  return null;
+}
+
 export const POST = handle(async (req) => {
   const ip = clientIp(req), now = Date.now();
   const recent = (hits.get(ip) || []).filter((t) => now - t < 10 * 60_000);
@@ -77,8 +91,14 @@ export const POST = handle(async (req) => {
 
   // Cegah satu wajah didaftarkan dua kali dengan identitas berbeda
   const s = await getSettings();
-  const dupFace = await matchDescriptor(descs[0], Number(s.face_threshold || 0.5), 0);
-  if (dupFace.matched && dupFace.student_id !== claimId) throw new HttpError(409, 'Wajah ini sudah terdaftar atas siswa lain. Hubungi admin jika ada kesalahan.');
+  const owner = await faceOwner(descs[0], Number(s.face_threshold || 0.5), claimId);
+  if (owner) {
+    // Identitas pemilik wajah hanya dikirim ke admin, tidak ditampilkan ke pendaftar.
+    try {
+      await notify('Pendaftaran ditolak: wajah ganda', `${nama} (NIS ${nis}) mencoba mendaftar, tetapi wajahnya cocok dengan ${owner.full_name} (NIS ${owner.nis}). Periksa di Data Siswa.`, 'warn');
+    } catch {}
+    throw new HttpError(409, 'Wajah ini sudah terdaftar atas siswa lain. Hubungi admin jika ada kesalahan.');
+  }
 
   const fields = {
     full_name: nama, gender: b.gender, birth_place: birthPlace, birth_date: birthDate,
@@ -94,9 +114,16 @@ export const POST = handle(async (req) => {
     must(await sb.from('face_data').insert(descs.map((d, i) => ({ student_id: sid, embedding_enc: encryptJSON(d), sample_no: i + 1 }))));
     must(await sb.from('student_accounts').insert({ student_id: sid, username, password_hash: await hashPassword(password), must_change: false }));
   } catch (e) {
-    // batalkan agar tidak ada data setengah jadi
-    if (claimId) { await sb.from('face_data').delete().eq('student_id', sid); await sb.from('student_accounts').delete().eq('student_id', sid); }
-    else await sb.from('students').delete().eq('id', sid);
+    // batalkan agar tidak ada data setengah jadi (data anak dihapus lebih dulu, tidak bergantung pada cascade)
+    try {
+      await sb.from('face_data').delete().eq('student_id', sid);
+      await sb.from('student_accounts').delete().eq('student_id', sid);
+      if (!claimId) {
+        await sb.from('parent_contacts').delete().eq('student_id', sid);
+        await sb.from('students').delete().eq('id', sid);
+      }
+    } catch {}
+    invalidateFaceCache();
     throw e;
   }
 
