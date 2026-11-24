@@ -2,9 +2,10 @@
 import { useEffect, useRef } from 'react';
 import { api } from '@/lib/client';
 
-// Menjaga sesi tetap hidup SELAMA aplikasi terbuka di layar (walaupun pengguna hanya diam/membaca).
-// Jika aplikasi ditutup atau ditinggalkan (pindah aplikasi, layar dikunci), denyut berhenti dan
-// cookie sesi habis sendiri sekitar 5 menit kemudian. Saat pengguna kembali, mereka diarahkan ke login.
+// Menjaga sesi tetap hidup SELAMA aplikasi masih terbuka (tab/aplikasi masih berjalan),
+// walaupun pengguna hanya diam, membaca, atau berpindah ke tab lain di browser.
+// Jika aplikasi ditutup / di-swipe keluar / ditinggalkan di HP (proses dibekukan), denyut berhenti
+// dan cookie sesi habis sendiri sekitar 5 menit kemudian. Saat kembali, pengguna diarahkan ke login.
 const BEAT_MS = 30 * 1000;
 
 export default function IdleLogout({ pingUrl, loginUrl }) {
@@ -14,7 +15,7 @@ export default function IdleLogout({ pingUrl, loginUrl }) {
     if (!pingUrl) return undefined;
 
     const beat = async () => {
-      if (document.visibilityState !== 'visible' || busy.current) return;
+      if (busy.current) return;
       busy.current = true;
       try {
         await api(pingUrl, { method: 'POST' });
