@@ -10,7 +10,7 @@ const hm = (t) => String(t).slice(0, 5).replace(':', '.');
 // Hanya data milik siswa yang sedang login (student_id diambil dari sesi, bukan dari permintaan)
 export const GET = handle(async (req) => {
   const s = await requireStudent(req);
-  const acc = must(await db().from('student_accounts').select('must_change,is_active,approval_status,username,,students(full_name,nis,status,created_at,class_id,classes(name),departments(name))').eq('id', s.account_id).single());
+  const acc = must(await db().from('student_accounts').select('must_change,is_active,approval_status,username,students(full_name,nis,status,created_at,class_id,classes(name),departments(name))').eq('id', s.account_id).single());
   if (acc.is_active === false || acc.students?.status !== 'aktif') throw new HttpError(403, 'Akun nonaktif. Hubungi admin sekolah.');
   if (acc.approval_status && acc.approval_status !== 'disetujui') throw new HttpError(403, 'Akun belum dikonfirmasi admin.');
   if (acc.must_change) return { must_change: true };
