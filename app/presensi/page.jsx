@@ -7,6 +7,13 @@ import { loadFaceApi, DETECT_OPTS, DETECT_FAST, startCamera, stopCamera, eyeAspe
 const COOLDOWN_MS = 5000;
 const REPEAT_VOICE_MS = 10_000;
 
+// Pengaturan deteksi kedip (relatif terhadap tinggi mata saat terbuka)
+const BLINK_WINDOW_MS = 1500; // jendela waktu untuk mengukur "mata terbuka"
+const CLOSE_RATIO = 0.82;     // dianggap tertutup bila EAR < 82% dari EAR terbuka
+const OPEN_RATIO = 0.90;      // dianggap terbuka lagi bila EAR > 90% dari EAR terbuka
+const MAX_CLOSED_MS = 2500;   // mata tertutup lebih lama dari ini bukan kedipan
+const NO_BLINK_TIP_MS = 10_000;
+
 export default function Presensi() {
   const videoRef = useRef(null);
   const streamRef = useRef(null);
@@ -22,7 +29,10 @@ export default function Presensi() {
   const [voice, setVoice] = useState({ on: true, volume: 1, rate: 1 });
   const [showSet, setShowSet] = useState(false);
   const [clock, setClock] = useState('');
-  const st = useRef({ activity: 'zuhur', busy: false, blink: 0, closed: false, blinkAt: 0, lastSent: new Map(), pauseUntil: 0, debug: false });
+  const st = useRef({
+    activity: 'zuhur', busy: false, blink: 0, closed: false, closedAt: 0, blinkAt: 0,
+    hist: [], frames: 0, faceSince: 0, lastSent: new Map(), pauseUntil: 0, debug: false, stop: false,
+  });
 
   useEffect(() => {
     loadFaceApi().catch(() => {});
@@ -32,7 +42,10 @@ export default function Presensi() {
     api('/api/presensi/config').then(setCfg).catch((e) => setMsg(e.message));
   }, []);
   useEffect(() => { st.current.activity = activity; }, [activity]);
-  useEffect(() => { const t = setInterval(() => setClock(new Date().toLocaleTimeString('id-ID', { timeZone: 'Asia/Jakarta', hour12: false }).replace(/:/g, '.')), 1000); return () => clearInterval(t); }, []);
+  useEffect(() => {
+    const t = setInterval(() => setClock(new Date().toLocaleTimeString('id-ID', { timeZone: 'Asia/Jakarta', hour12: false }).replace(/:/g, '.')), 1000);
+    return () => clearInterval(t);
+  }, []);
 
   const start = useCallback(async () => {
     setPhase('loading'); setMsg('');
@@ -44,47 +57,88 @@ export default function Presensi() {
       loop(f);
     } catch (e) {
       setPhase('error');
-      setMsg(e.name === 'NotAllowedError' ? 'Izin kamera ditolak. Aktifkan izin kamera di pengaturan browser lalu muat ulang.' : e.message);
+      setMsg(e.name === 'NotAllowedError' ? 'Izin kamera ditolak. Aktifkan izin kamera di pengaturan browser lalu muat ulang.' : (e.message || 'Gagal memulai kamera.'));
     }
     // eslint-disable-next-line
   }, []);
 
   useEffect(() => () => { st.current.stop = true; stopCamera(streamRef.current); }, []);
 
+  function resetBlink(S) {
+    S.blink = 0; S.closed = false; S.closedAt = 0; S.hist = [];
+  }
+
   async function loop(f) {
-    const S = st.current; S.stop = false; S.base = 0; S.frames = 0;
+    const S = st.current; S.stop = false; S.frames = 0; S.faceSince = 0; resetBlink(S);
     const v = videoRef.current;
+
     const tick = async () => {
       if (S.stop) return;
       const now = Date.now();
       if (S.busy || now < S.pauseUntil || v.readyState < 2) return setTimeout(tick, 100);
+      let delay = 0;
       try {
         const dets = await f.detectAllFaces(v, DETECT_FAST(f)).withFaceLandmarks();
-        if (dets.length === 0) { S.blink = 0; S.closed = false; S.base = 0; S.frames = 0; setHint('Posisikan wajah di dalam bingkai'); }
-        else if (dets.length > 1) { S.blink = 0; setHint('Hanya satu wajah yang boleh terlihat'); }
-        else {
-          const d = dets[0]; const box = d.detection.box;
-          if (box.width < v.videoWidth * 0.22) { setHint('Dekatkan wajah ke kamera'); S.frames = 0; }
-          else {
-            const e = eyeAspect(d.landmarks);
+
+        if (dets.length === 0) {
+          resetBlink(S); S.frames = 0; S.faceSince = 0;
+          setHint('Posisikan wajah di dalam bingkai');
+        } else if (dets.length > 1) {
+          resetBlink(S);
+          setHint('Hanya satu wajah yang boleh terlihat');
+        } else {
+          const d = dets[0];
+          const box = d.detection.box;
+          if (box.width < v.videoWidth * 0.22) {
+            resetBlink(S); S.frames = 0; S.faceSince = 0;
+            setHint('Dekatkan wajah ke kamera');
+          } else {
+            if (!S.faceSince) S.faceSince = now;
             S.frames++;
-            S.base = Math.max(e, (S.base || e) * 0.995);            // tinggi mata saat terbuka (adaptif per orang)
-            const thr = Math.min(0.25, S.base * 0.88);                // ambang 'tertutup' relatif (lebih peka)
-            if (S.debug) setEarInfo(`EAR ${e.toFixed(3)} | dasar ${S.base.toFixed(3)} | batas ${thr.toFixed(3)} | tertutup ${S.closed ? 'YA' : 'tidak'} | kedip ${S.blink}`);
-            if (S.frames > 6) {
-              if (e < thr) S.closed = true;
-              else if (S.closed && e >= thr * 1.03) { S.closed = false; S.blink++; S.blinkAt = now; }
+
+            const e = eyeAspect(d.landmarks);
+            if (Number.isFinite(e) && e > 0) {
+              // simpan riwayat EAR pada jendela waktu terakhir
+              S.hist.push({ t: now, e });
+              while (S.hist.length && now - S.hist[0].t > BLINK_WINDOW_MS) S.hist.shift();
+
+              // "mata terbuka" = persentil ke-70 dari riwayat (tahan terhadap noise & FPS rendah)
+              const sorted = S.hist.map((h) => h.e).sort((a, b) => b - a);
+              const open = sorted[Math.floor(sorted.length * 0.3)] || e;
+              const closeThr = open * CLOSE_RATIO;
+              const openThr = open * OPEN_RATIO;
+
+              if (S.frames > 4 && S.hist.length >= 3) {
+                if (e < closeThr) {
+                  if (!S.closed) { S.closed = true; S.closedAt = now; }
+                } else if (S.closed && e > openThr) {
+                  const dur = now - S.closedAt;
+                  S.closed = false;
+                  if (dur <= MAX_CLOSED_MS) { S.blink++; S.blinkAt = now; }
+                }
+                // mata tertutup terlalu lama: bukan kedipan, ulangi
+                if (S.closed && now - S.closedAt > MAX_CLOSED_MS) { S.closed = false; S.hist = []; }
+              }
+
+              if (S.debug) setEarInfo(`EAR ${e.toFixed(3)} | terbuka ${open.toFixed(3)} | batas tutup ${closeThr.toFixed(3)} | tertutup ${S.closed ? 'YA' : 'tidak'} | kedip ${S.blink}`);
             }
+
             if (S.blink > 0 && now - S.blinkAt > 6000) S.blink = 0;
-            if (S.blink === 0) setHint(S.closed ? 'Buka mata…' : 'Lihat kamera, lalu KEDIPKAN MATA pelan-pelan');
-            else {
+
+            if (S.blink === 0) {
+              if (S.closed) setHint('Buka mata…');
+              else if (now - S.faceSince > NO_BLINK_TIP_MS) setHint('Kedipkan mata lebih jelas. Pastikan wajah terang & tidak membelakangi jendela');
+              else setHint('Lihat kamera, lalu KEDIPKAN MATA pelan-pelan');
+            } else {
               setHint('✔ Kedip terdeteksi — memverifikasi wajah…');
               S.busy = true;
               try {
                 const full = await f.detectSingleFace(v, DETECT_OPTS(f)).withFaceLandmarks().withFaceDescriptor();
                 if (full) await submit(Array.from(full.descriptor));
-                else setHint('Wajah tidak terbaca, coba kedip lagi');
-              } finally { S.busy = false; S.blink = 0; S.closed = false; }
+                else { setHint('Wajah tidak terbaca, coba kedip lagi'); beep('warn'); }
+              } finally {
+                S.busy = false; resetBlink(S); S.faceSince = Date.now();
+              }
             }
           }
         }
@@ -92,8 +146,9 @@ export default function Presensi() {
         console.error('Deteksi wajah gagal:', err);
         S.busy = false;
         setHint('Kesalahan deteksi: ' + (err?.message || err));
+        delay = 300; // hindari loop error yang terlalu rapat
       }
-      setTimeout(tick, 0);
+      setTimeout(tick, delay);
     };
     tick();
   }
@@ -105,7 +160,14 @@ export default function Presensi() {
       const key = (r.student?.nis || '') + r.result;
       const last = S.lastSent.get(key) || 0;
       S.pauseUntil = Date.now() + COOLDOWN_MS;
-      setResult(r);
+
+      // pesan cadangan supaya layar tidak pernah kosong
+      const fallbackMsg =
+        r.result === 'unknown' ? 'Wajah tidak dikenali. Silakan coba kembali.'
+        : r.result === 'closed' ? 'Presensi sedang ditutup (di luar jadwal).'
+        : 'Presensi tidak dapat diproses.';
+      const finalMsg = r.message || fallbackMsg;
+      setResult({ ...r, message: finalMsg });
 
       const nama = r.student?.nama;
       if (nama && (r.result === 'ok' || r.result === 'duplicate')) {
@@ -113,27 +175,27 @@ export default function Presensi() {
         setRecent((p) => [{ nama, kelas: r.student.kelas, waktu: r.waktu, label, ok: r.result === 'ok' }, ...p.filter((x) => x.nama !== nama)].slice(0, 5));
       }
 
-      // anti suara berulang: hasil yang sama untuk siswa yang sama tidak diucapkan lagi dalam 10 detik
-      if (Date.now() - last > REPEAT_VOICE_MS) {
+      const isSuccessType = r.result === 'ok' || r.result === 'duplicate';
+      // anti suara berulang hanya untuk hasil sukses/duplikat; pesan gagal SELALU diucapkan
+      if (!isSuccessType || Date.now() - last > REPEAT_VOICE_MS) {
         if (r.result === 'ok') {
           const st2 = (r.status_label || r.status || 'hadir').toLowerCase();
           beep('ok');
-          speak(r.speech || `${nama}, presensi ${r.student.kegiatan || ''} berhasil. Anda dinyatakan ${st2}.`);
+          speak(r.speech || `${nama}, presensi ${r.student?.kegiatan || ''} berhasil. Anda dinyatakan ${st2}.`);
         } else if (r.result === 'duplicate') {
           beep('warn'); speak(`${nama}, Anda sudah melakukan presensi hari ini.`);
-        } else if (r.result === 'unknown') {
-          beep('err'); speak('Wajah tidak dikenali. Silakan coba kembali.');
         } else {
-          beep('err'); speak(r.message || 'Presensi tidak dapat diproses.');
+          beep('err'); speak(finalMsg);
         }
         S.lastSent.set(key, Date.now());
       }
       setTimeout(() => setResult(null), COOLDOWN_MS - 200);
     } catch (e) {
       S.pauseUntil = Date.now() + 3000;
+      const m = e?.message || 'Terjadi kesalahan saat menghubungi server.';
       beep('err');
-      speak(e.message || 'Terjadi kesalahan.');
-      setResult({ result: 'error', message: e.message });
+      speak(m);
+      setResult({ result: 'error', message: m });
       setTimeout(() => setResult(null), 2800);
     }
   }
@@ -182,7 +244,7 @@ export default function Presensi() {
           )}
           {result && (
             <div className={`absolute inset-0 bg-gradient-to-br ${color} text-white flex flex-col items-center justify-center p-4 text-center pop overflow-y-auto`}>
-              {result.result === 'ok' || result.result === 'duplicate' ? (
+              {(result.result === 'ok' || result.result === 'duplicate') && result.student ? (
                 <>
                   {result.student.photo ? <img src={result.student.photo} alt="" className="w-24 h-24 md:w-32 md:h-32 rounded-full object-cover border-4 border-white shadow-xl" /> : <div className="text-6xl">{result.result === 'ok' ? '✅' : 'ℹ️'}</div>}
                   <div className="mt-2 text-2xl md:text-3xl font-extrabold">{result.result === 'ok' ? (isLate ? 'HADIR (TERLAMBAT)' : 'PRESENSI BERHASIL!') : 'SUDAH PRESENSI SEBELUMNYA'}</div>
