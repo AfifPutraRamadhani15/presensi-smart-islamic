@@ -2,7 +2,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { api } from '@/lib/client';
-import { loadFaceApi, DETECT_OPTS, DETECT_FAST, startCamera, stopCamera, eyeAspect, getVoicePrefs, setVoicePrefs, speak, unlockSpeech, unlockAudio, beep } from '@/lib/faceClient';
+import { loadFaceApi, DETECT_OPTS, DETECT_FAST, startCamera, stopCamera, eyeAspect, getVoicePrefs, setVoicePrefs, speak, unlockSpeech, unlockAudio, beep, cameraErrorMessage, listCameras, isFrontCamera, isInAppBrowser } from '@/lib/faceClient';
 
 const COOLDOWN_MS = 5000;
 const REPEAT_VOICE_MS = 10_000;
@@ -30,14 +30,20 @@ export default function Presensi() {
   const [voice, setVoice] = useState({ on: true, volume: 1, rate: 1 });
   const [showSet, setShowSet] = useState(false);
   const [clock, setClock] = useState('');
+  const [mirror, setMirror] = useState(true);
+  const [cams, setCams] = useState([]);
+  const [inApp, setInApp] = useState(false);
+  const phaseRef = useRef('init');
+  const camRef = useRef({ deviceId: null, facing: 'user' });
   const st = useRef({
     activity: 'zuhur', busy: false, blink: 0, closed: false, closedAt: 0, blinkAt: 0,
-    hist: [], frames: 0, faceSince: 0, lastSent: new Map(), pauseUntil: 0, debug: false, stop: false,
+    hist: [], frames: 0, faceSince: 0, lastSent: new Map(), pauseUntil: 0, debug: false, stop: false, loopId: 0,
   });
 
   useEffect(() => {
     loadFaceApi().catch(() => {});
     setVoice(getVoicePrefs());
+    setInApp(isInAppBrowser());
     const dbg = new URLSearchParams(window.location.search).get('debug') === '1';
     st.current.debug = dbg; setDebug(dbg);
     api('/api/presensi/config').then(setCfg).catch((e) => setMsg(e.message));
@@ -49,28 +55,68 @@ export default function Presensi() {
   }, []);
 
   const start = useCallback(async () => {
+    const S = st.current;
+    S.stop = true; S.busy = false;
+    stopCamera(streamRef.current); streamRef.current = null;
     setPhase('loading'); setMsg(''); setStep('Memuat model wajah…');
     unlockSpeech(); unlockAudio();
     try {
       const f = await loadFaceApi();
       setStep('Membuka kamera…');
-      streamRef.current = await startCamera(videoRef.current);
+      const C = camRef.current;
+      const stream = await startCamera(videoRef.current, C.facing, C.deviceId);
+      streamRef.current = stream;
+      const track = stream.getVideoTracks()[0];
+      const settings = (track && track.getSettings && track.getSettings()) || {};
+      if (settings.deviceId) C.deviceId = settings.deviceId;
+      setMirror(isFrontCamera(stream));
+      listCameras().then(setCams).catch(() => {});
+      // Jika kamera terputus (dicabut / diambil aplikasi lain), tampilkan tombol Coba Lagi.
+      if (track) track.addEventListener('ended', () => {
+        if (streamRef.current === stream && phaseRef.current === 'ready') {
+          S.stop = true; setPhase('error'); setMsg('Kamera terputus. Tekan "Coba Lagi".');
+        }
+      });
       setPhase('ready');
       loop(f);
     } catch (e) {
       stopCamera(streamRef.current); streamRef.current = null;
       setPhase('error');
-      setMsg(
-        e.name === 'NotAllowedError' ? 'Izin kamera ditolak. Aktifkan izin kamera di pengaturan browser lalu muat ulang.'
-        : e.name === 'NotFoundError' ? 'Kamera tidak ditemukan di perangkat ini.'
-        : e.name === 'NotReadableError' ? 'Kamera sedang dipakai aplikasi lain. Tutup aplikasi itu lalu tekan "Coba Lagi".'
-        : (e.message || 'Gagal memulai kamera.')
-      );
+      setMsg(cameraErrorMessage(e));
     }
     // eslint-disable-next-line
   }, []);
 
   useEffect(() => () => { st.current.stop = true; stopCamera(streamRef.current); }, []);
+  useEffect(() => { phaseRef.current = phase; }, [phase]);
+
+  // iPhone/Android menghentikan kamera saat aplikasi ditinggalkan: nyalakan lagi saat kembali.
+  useEffect(() => {
+    const live = () => { const t = streamRef.current?.getVideoTracks?.()[0]; return !!t && t.readyState === 'live' && !t.muted; };
+    const onVis = () => {
+      if (document.visibilityState !== 'visible' || phaseRef.current !== 'ready') return;
+      if (live()) return;
+      setTimeout(() => { if (phaseRef.current === 'ready' && !live()) start(); }, 800);
+    };
+    document.addEventListener('visibilitychange', onVis);
+    return () => document.removeEventListener('visibilitychange', onVis);
+  }, [start]);
+
+  function switchCamera() {
+    const C = camRef.current;
+    if (cams.length > 1) {
+      const i = cams.findIndex((c) => c.deviceId === C.deviceId);
+      C.deviceId = cams[(i + 1) % cams.length].deviceId;
+    } else {
+      C.deviceId = null; C.facing = C.facing === 'user' ? 'environment' : 'user';
+    }
+    start();
+  }
+
+  async function copyLink() {
+    try { await navigator.clipboard.writeText(window.location.href); setMsg('Alamat disalin. Tempel di Chrome atau Safari.'); }
+    catch { setMsg('Salin alamat dari bilah alamat, lalu buka di Chrome atau Safari.'); }
+  }
 
   function resetBlink(S) {
     S.blink = 0; S.closed = false; S.closedAt = 0; S.hist = [];
@@ -78,10 +124,11 @@ export default function Presensi() {
 
   async function loop(f) {
     const S = st.current; S.stop = false; S.frames = 0; S.faceSince = 0; resetBlink(S);
+    const id = ++S.loopId;
     const v = videoRef.current;
 
     const tick = async () => {
-      if (S.stop) return;
+      if (S.stop || id !== S.loopId) return;
       const now = Date.now();
       if (S.busy || now < S.pauseUntil || v.readyState < 2) return setTimeout(tick, 100);
       let delay = 0;
@@ -234,7 +281,8 @@ export default function Presensi() {
 
       <section className="relative flex-1 mt-3 flex flex-col lg:flex-row gap-4 items-center justify-center">
         <div className="relative w-full max-w-3xl aspect-[4/3] rounded-3xl overflow-hidden bg-black shadow-2xl border-4 border-white/40">
-          <video ref={videoRef} className="w-full h-full object-cover [transform:scaleX(-1)]" playsInline muted />
+          <video ref={videoRef} className={`w-full h-full object-cover ${mirror ? '[transform:scaleX(-1)]' : ''}`} playsInline muted />
+          {phase === 'ready' && <button type="button" onClick={switchCamera} className="absolute top-2 right-2 z-10 btn bg-black/50 text-white !py-1.5 !px-3 text-xs">🔄 Ganti Kamera</button>}
           {phase === 'ready' && <><div className="absolute inset-[12%] rounded-[40%] border-4 border-dashed border-white/70 pointer-events-none" /><div className="scanline" /></>}
           {phase === 'ready' && <div className="absolute bottom-3 inset-x-3 text-center"><span className="inline-block bg-black/60 text-white text-sm font-semibold px-4 py-2 rounded-full">{hint}</span></div>}
           {phase === 'ready' && debug && <div className="absolute top-2 inset-x-2 text-center"><span className="inline-block bg-black/70 text-yellow-300 text-xs font-mono px-3 py-1 rounded">{earInfo || 'debug aktif…'}</span></div>}
@@ -244,6 +292,7 @@ export default function Presensi() {
                 <>
                   <div className="text-5xl">📷</div>
                   <button onClick={start} className="btn btn-gold !py-3 !px-8 text-base">{phase === 'error' ? 'Coba Lagi' : 'Aktifkan Kamera & Mulai'}</button>
+                  {inApp && <div className="text-xs bg-yellow-400/20 border border-yellow-300/40 rounded-xl p-2 max-w-sm">⚠ Halaman ini dibuka dari dalam aplikasi lain (mis. WhatsApp/Instagram) dan kamera sering diblokir di sini. Buka lewat Chrome atau Safari. <button type="button" className="underline font-bold" onClick={copyLink}>Salin alamat</button></div>}
                   {msg && <div className="text-sm bg-red-500/30 rounded-xl p-2 max-w-sm">{msg}</div>}
                   <div className="text-xs opacity-70 max-w-xs">Tombol ini juga mengaktifkan suara (aturan browser membutuhkan sentuhan pengguna).</div>
                 </>
