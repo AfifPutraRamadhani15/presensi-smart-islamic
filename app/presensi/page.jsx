@@ -20,6 +20,7 @@ export default function Presensi() {
   const [cfg, setCfg] = useState(null);
   const [activity, setActivity] = useState('zuhur');
   const [phase, setPhase] = useState('init'); // init | loading | ready | error
+  const [step, setStep] = useState('Memuat model wajah…');
   const [msg, setMsg] = useState('');
   const [hint, setHint] = useState('Memuat…');
   const [result, setResult] = useState(null);
@@ -48,16 +49,23 @@ export default function Presensi() {
   }, []);
 
   const start = useCallback(async () => {
-    setPhase('loading'); setMsg('');
+    setPhase('loading'); setMsg(''); setStep('Memuat model wajah…');
     unlockSpeech(); unlockAudio();
     try {
       const f = await loadFaceApi();
+      setStep('Membuka kamera…');
       streamRef.current = await startCamera(videoRef.current);
       setPhase('ready');
       loop(f);
     } catch (e) {
+      stopCamera(streamRef.current); streamRef.current = null;
       setPhase('error');
-      setMsg(e.name === 'NotAllowedError' ? 'Izin kamera ditolak. Aktifkan izin kamera di pengaturan browser lalu muat ulang.' : (e.message || 'Gagal memulai kamera.'));
+      setMsg(
+        e.name === 'NotAllowedError' ? 'Izin kamera ditolak. Aktifkan izin kamera di pengaturan browser lalu muat ulang.'
+        : e.name === 'NotFoundError' ? 'Kamera tidak ditemukan di perangkat ini.'
+        : e.name === 'NotReadableError' ? 'Kamera sedang dipakai aplikasi lain. Tutup aplikasi itu lalu tekan "Coba Lagi".'
+        : (e.message || 'Gagal memulai kamera.')
+      );
     }
     // eslint-disable-next-line
   }, []);
@@ -232,7 +240,7 @@ export default function Presensi() {
           {phase === 'ready' && debug && <div className="absolute top-2 inset-x-2 text-center"><span className="inline-block bg-black/70 text-yellow-300 text-xs font-mono px-3 py-1 rounded">{earInfo || 'debug aktif…'}</span></div>}
           {phase !== 'ready' && (
             <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-dark/90 p-6 text-center">
-              {phase === 'loading' ? <div className="animate-pulse">Memuat model wajah & kamera…</div> : (
+              {phase === 'loading' ? <div className="animate-pulse">{step}</div> : (
                 <>
                   <div className="text-5xl">📷</div>
                   <button onClick={start} className="btn btn-gold !py-3 !px-8 text-base">{phase === 'error' ? 'Coba Lagi' : 'Aktifkan Kamera & Mulai'}</button>
